@@ -325,16 +325,25 @@ export function initSocket(server: HttpServer): SocketIOServer {
     });
 
     // --- 3.6 STAGE HAND REQUESTS & PARTICIPANTS ---
-    socket.on('hand:raise', ({ roomId }: { roomId: string }) => {
+    socket.on('hand:raise', (data: any) => {
       try {
-        const member = getActiveMember(roomId, userId);
+        const roomId = data?.roomId || data?.room_id;
+        if (!roomId) return;
+        let member = getActiveMember(roomId, userId);
+        if (!member) {
+          joinRoom(roomId, userId, 'AUDIENCE');
+          member = getActiveMember(roomId, userId);
+        }
         if (!member || ['SPEAKER', 'OWNER'].includes(member.role)) return;
         const req = raiseHand(roomId, userId);
         io!.to(roomId).emit('hand:request_updated', {
           id: req.id,
           request_id: req.id,
+          room_id: roomId,
           user_id: userId,
+          display_name: user.display_name,
           userName: user.display_name,
+          avatar_seed: user.avatar_seed,
           userAvatar: user.avatar_seed,
           status: 'pending',
           position: req.position,
@@ -345,13 +354,17 @@ export function initSocket(server: HttpServer): SocketIOServer {
       }
     });
 
-    socket.on('hand:cancel', ({ roomId, requestId }: { roomId: string; requestId?: string }) => {
+    socket.on('hand:cancel', (data: any) => {
       try {
+        const roomId = data?.roomId || data?.room_id;
+        const requestId = data?.requestId || data?.request_id;
+        if (!roomId) return;
         const req = cancelHandRequest(requestId || '', userId);
         if (req) {
           io!.to(roomId).emit('hand:request_updated', {
             id: req.id,
             request_id: req.id,
+            room_id: roomId,
             user_id: userId,
             status: 'cancelled',
           });
@@ -361,8 +374,11 @@ export function initSocket(server: HttpServer): SocketIOServer {
       }
     });
 
-    socket.on('hand:approve', ({ roomId, requestId }: { roomId: string; requestId: string }) => {
+    socket.on('hand:approve', (data: any) => {
       try {
+        const roomId = data?.roomId || data?.room_id;
+        const requestId = data?.requestId || data?.request_id;
+        if (!roomId || !requestId) return;
         const member = getActiveMember(roomId, userId);
         if (!member || !['OWNER', 'MODERATOR'].includes(member.role)) return;
 
@@ -373,6 +389,7 @@ export function initSocket(server: HttpServer): SocketIOServer {
         io!.to(roomId).emit('hand:request_updated', {
           id: req.id,
           request_id: req.id,
+          room_id: roomId,
           user_id: req.user_id,
           status: 'approved',
         });
@@ -380,13 +397,22 @@ export function initSocket(server: HttpServer): SocketIOServer {
           user_id: req.user_id,
           role: 'SPEAKER',
         });
+        // Direct stage invite so mobile users can tap to grant microphone permission
+        io!.to(roomId).emit('stage:invite', {
+          invite_id: req.id,
+          user_id: req.user_id,
+          invited_by_name: user.display_name || 'Chủ phòng',
+        });
       } catch (e: any) {
         console.warn('hand:approve error:', e);
       }
     });
 
-    socket.on('hand:reject', ({ roomId, requestId }: { roomId: string; requestId: string }) => {
+    socket.on('hand:reject', (data: any) => {
       try {
+        const roomId = data?.roomId || data?.room_id;
+        const requestId = data?.requestId || data?.request_id;
+        if (!roomId || !requestId) return;
         const member = getActiveMember(roomId, userId);
         if (!member || !['OWNER', 'MODERATOR'].includes(member.role)) return;
 
@@ -396,6 +422,7 @@ export function initSocket(server: HttpServer): SocketIOServer {
         io!.to(roomId).emit('hand:request_updated', {
           id: req.id,
           request_id: req.id,
+          room_id: roomId,
           user_id: req.user_id,
           status: 'rejected',
         });
@@ -404,8 +431,45 @@ export function initSocket(server: HttpServer): SocketIOServer {
       }
     });
 
-    socket.on('stage:invite_member', ({ roomId, targetUserId }: { roomId: string; targetUserId: string }) => {
+    socket.on('stage:accept', (data: any) => {
       try {
+        const roomId = data?.roomId || data?.room_id;
+        if (!roomId) return;
+        setMemberRole(roomId, userId, 'SPEAKER');
+        socket.join(`speakers:${roomId}`);
+        io!.to(roomId).emit('stage:participant_added', {
+          user_id: userId,
+          role: 'SPEAKER',
+        });
+      } catch (e: any) {
+        console.warn('stage:accept error:', e);
+      }
+    });
+
+    socket.on('stage:decline', (_data: any) => {
+      // Handled gracefully
+    });
+
+    socket.on('stage:remove_self', (data: any) => {
+      try {
+        const roomId = data?.roomId || data?.room_id;
+        if (!roomId) return;
+        setMemberRole(roomId, userId, 'AUDIENCE');
+        socket.leave(`speakers:${roomId}`);
+        io!.to(roomId).emit('stage:participant_removed', {
+          user_id: userId,
+          new_role: 'AUDIENCE',
+        });
+      } catch (e: any) {
+        console.warn('stage:remove_self error:', e);
+      }
+    });
+
+    socket.on('stage:invite_member', (data: any) => {
+      try {
+        const roomId = data?.roomId || data?.room_id;
+        const targetUserId = data?.targetUserId || data?.target_user_id || data?.userId || data?.user_id;
+        if (!roomId || !targetUserId) return;
         const member = getActiveMember(roomId, userId);
         if (!member || !['OWNER', 'MODERATOR'].includes(member.role)) return;
 
@@ -419,8 +483,11 @@ export function initSocket(server: HttpServer): SocketIOServer {
       }
     });
 
-    socket.on('stage:remove_speaker', ({ roomId, targetUserId }: { roomId: string; targetUserId: string }) => {
+    socket.on('stage:remove_speaker', (data: any) => {
       try {
+        const roomId = data?.roomId || data?.room_id;
+        const targetUserId = data?.targetUserId || data?.target_user_id || data?.userId || data?.user_id;
+        if (!roomId || !targetUserId) return;
         const member = getActiveMember(roomId, userId);
         const isSelf = targetUserId === userId;
         if (!isSelf && (!member || !['OWNER', 'MODERATOR'].includes(member.role))) return;
@@ -519,9 +586,12 @@ export function initSocket(server: HttpServer): SocketIOServer {
       }
     });
 
-    // Forward stream request ONLY to stage performers in speakers:${roomId}
-    socket.on('signal:request', ({ roomId }: { roomId: string }) => {
-      io!.to(`speakers:${roomId}`).emit('signal:request', { from: socket.id, fromUserId: userId });
+    // Forward stream request to room members so anyone with an active mic creates a peer offer
+    socket.on('signal:request', (data: any) => {
+      const roomId = data?.roomId || data?.room_id;
+      if (roomId) {
+        socket.to(roomId).emit('signal:request', { from: socket.id, fromUserId: userId });
+      }
     });
 
     socket.on('signal:stop', ({ roomId }: { roomId: string }) => {

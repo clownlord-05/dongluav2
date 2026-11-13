@@ -471,7 +471,9 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
         gainNode.connect(ctx.destination);
 
         const now = ctx.currentTime;
-        if (nextPlayTimeRef.current < now) {
+        // Strict anti-drift: If scheduled playback drifted >80ms ahead of real time,
+        // immediately reset to now to eliminate all accumulated network delay!
+        if (nextPlayTimeRef.current < now || nextPlayTimeRef.current - now > 0.08) {
           nextPlayTimeRef.current = now;
         }
         source.start(nextPlayTimeRef.current);
@@ -489,7 +491,7 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
     socket.on('audio:relay_chunk', handleRelayChunk);
 
     // Announce to the room that we are ready to receive audio streams
-    socket.emit('signal:request', { roomId });
+    socket.emit('signal:request', { roomId, room_id: roomId });
 
     return () => {
       socket.off('signal:offer', handleOffer);
@@ -505,11 +507,10 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
   useEffect(() => {
     if (!socket || !stream || !roomId) return;
 
-    // 1. Direct WebRTC P2P Mesh ONLY for stage performers (max 8 peers)
-    const stagePerformers = members.filter(
-      (m) => (m.role === 'SPEAKER' || m.role === 'OWNER') && m.user_id !== currentUserId
-    );
-    stagePerformers.slice(0, 8).forEach((m) => {
+    // 1. Direct WebRTC P2P Mesh for ALL active room members (up to 25 peers)
+    // Direct UDP peer connection achieves 10ms-30ms ultra-low latency without server bottlenecks
+    const activePeers = members.filter((m) => m.user_id !== currentUserId);
+    activePeers.slice(0, 25).forEach((m) => {
       createAndSendOffer(m.user_id);
     });
 
@@ -550,7 +551,7 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
         silentGain?.disconnect();
       } catch (e) {}
       if (socket && roomId) {
-        socket.emit('signal:stop', { roomId });
+        socket.emit('signal:stop', { roomId, room_id: roomId });
       }
     };
   }, [stream, members, currentUserId, socket, roomId, createAndSendOffer, getAudioContext]);

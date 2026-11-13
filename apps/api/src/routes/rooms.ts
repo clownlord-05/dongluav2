@@ -50,7 +50,13 @@ router.get('/:roomId', (req: Request, res: Response): void => {
     members,
     memberCount,
     totalMembers: memberCount,
-    playback: playback ? { ...playback, current_position: computeCurrentPosition(playback) } : null,
+    playback: playback
+      ? {
+          ...playback,
+          position_seconds: computeCurrentPosition(playback),
+          current_position: computeCurrentPosition(playback),
+        }
+      : null,
   });
 });
 

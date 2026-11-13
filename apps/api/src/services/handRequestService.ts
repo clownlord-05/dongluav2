@@ -4,7 +4,7 @@ import { HandRequest, HandRequestStatus } from '../types/shared';
 
 const REQUEST_TTL_MINUTES = 10;
 
-export function raiseHand(roomId: string, userId: string): HandRequest {
+export function raiseHand(roomId: string, userId: string): HandRequest & { display_name?: string; avatar_seed?: string } {
   const db = getDb();
 
   // Cancel any existing pending request
@@ -20,14 +20,20 @@ export function raiseHand(roomId: string, userId: string): HandRequest {
   `).get(roomId) as { next_pos: number };
 
   const id = uuidv4();
+  const nowIso = new Date().toISOString();
   const expiresAt = new Date(Date.now() + REQUEST_TTL_MINUTES * 60 * 1000).toISOString();
 
   db.prepare(`
-    INSERT INTO hand_requests (id, room_id, user_id, status, position, expires_at)
-    VALUES (?, ?, ?, 'pending', ?, ?)
-  `).run(id, roomId, userId, posRow.next_pos, expiresAt);
+    INSERT INTO hand_requests (id, room_id, user_id, status, position, created_at, expires_at)
+    VALUES (?, ?, ?, 'pending', ?, ?, ?)
+  `).run(id, roomId, userId, posRow.next_pos, nowIso, expiresAt);
 
-  return db.prepare('SELECT * FROM hand_requests WHERE id = ?').get(id) as HandRequest;
+  return db.prepare(`
+    SELECT hr.*, u.display_name, u.avatar_seed
+    FROM hand_requests hr
+    JOIN users u ON hr.user_id = u.id
+    WHERE hr.id = ?
+  `).get(id) as any;
 }
 
 export function cancelHandRequest(requestId: string, userId: string): HandRequest | undefined {
@@ -45,7 +51,7 @@ export function reviewHandRequest(
   requestId: string,
   reviewerId: string,
   approve: boolean
-): HandRequest | undefined {
+): (HandRequest & { display_name?: string; avatar_seed?: string }) | undefined {
   const db = getDb();
   const req = db.prepare(`
     SELECT * FROM hand_requests WHERE id = ? AND status = 'pending'
@@ -53,30 +59,40 @@ export function reviewHandRequest(
   if (!req) return undefined;
 
   const newStatus: HandRequestStatus = approve ? 'approved' : 'rejected';
+  const nowIso = new Date().toISOString();
   db.prepare(`
     UPDATE hand_requests
-    SET status = ?, reviewed_by = ?, reviewed_at = datetime('now')
+    SET status = ?, reviewed_by = ?, reviewed_at = ?
     WHERE id = ?
-  `).run(newStatus, reviewerId, requestId);
+  `).run(newStatus, reviewerId, nowIso, requestId);
 
-  return db.prepare('SELECT * FROM hand_requests WHERE id = ?').get(requestId) as HandRequest;
+  return db.prepare(`
+    SELECT hr.*, u.display_name, u.avatar_seed
+    FROM hand_requests hr
+    JOIN users u ON hr.user_id = u.id
+    WHERE hr.id = ?
+  `).get(requestId) as any;
 }
 
-export function getPendingRequests(roomId: string): HandRequest[] {
+export function getPendingRequests(roomId: string): (HandRequest & { display_name: string; avatar_seed: string })[] {
   const db = getDb();
+  const nowIso = new Date().toISOString();
   return db.prepare(`
-    SELECT * FROM hand_requests
-    WHERE room_id = ? AND status = 'pending'
-      AND (expires_at IS NULL OR expires_at > datetime('now'))
-    ORDER BY position ASC
-  `).all(roomId) as HandRequest[];
+    SELECT hr.*, u.display_name, u.avatar_seed
+    FROM hand_requests hr
+    JOIN users u ON hr.user_id = u.id
+    WHERE hr.room_id = ? AND hr.status = 'pending'
+      AND (hr.expires_at IS NULL OR hr.expires_at > ?)
+    ORDER BY hr.position ASC
+  `).all(roomId, nowIso) as any[];
 }
 
 export function getUserPendingRequest(roomId: string, userId: string): HandRequest | undefined {
   const db = getDb();
+  const nowIso = new Date().toISOString();
   return db.prepare(`
     SELECT * FROM hand_requests
     WHERE room_id = ? AND user_id = ? AND status = 'pending'
-      AND (expires_at IS NULL OR expires_at > datetime('now'))
-  `).get(roomId, userId) as HandRequest | undefined;
+      AND (expires_at IS NULL OR expires_at > ?)
+  `).get(roomId, userId, nowIso) as HandRequest | undefined;
 }

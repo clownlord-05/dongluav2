@@ -60,6 +60,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
   const [localVolume, setLocalVolume] = useState(80);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [userInteracted, setUserInteracted] = useState(false);
 
   // Inline YouTube Direct Search states
   const [searchQuery, setSearchQuery] = useState('');
@@ -85,6 +86,22 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
     }
   };
 
+  const handleUserTapToSync = () => {
+    setUserInteracted(true);
+    postIframeCommand('unMute');
+    postIframeCommand('setVolume', [localVolume]);
+    postIframeCommand('playVideo');
+    if (typeof playback?.position_seconds === 'number') {
+      const elapsed =
+        playback.state === 'playing' && playback.anchor_time
+          ? (Date.now() - new Date(playback.anchor_time).getTime()) / 1000
+          : 0;
+      const rate = playback.playback_rate || 1;
+      const targetPos = Math.max(0, playback.position_seconds + elapsed * rate + beatSyncOffsetMs / 1000);
+      postIframeCommand('seekTo', [targetPos, true]);
+    }
+  };
+
   // Listen to YouTube Iframe API postMessages (infoDelivery)
   useEffect(() => {
     const handleWindowMessage = (event: MessageEvent) => {
@@ -102,6 +119,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
             if (data.info.playerState === 1) {
               store.setState('playing');
               store.setBuffering(false);
+              setUserInteracted(true);
             } else if (data.info.playerState === 2) {
               store.setState('paused');
             } else if (data.info.playerState === 3) {
@@ -357,17 +375,54 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
         {playback?.video_id ? (
           // ACTIVE VIDEO IFRAME (Direct Embed, Guaranteed to Render)
           <div className="w-full h-full relative bg-black">
-            <iframe
-              ref={iframeRef}
-              key={playback.video_id}
-              src={`https://www.youtube-nocookie.com/embed/${playback.video_id}?enablejsapi=1&autoplay=1&controls=1&rel=0&playsinline=1&modestbranding=1&origin=${encodeURIComponent(
-                window.location.origin
-              )}`}
-              title={currentSongTitle}
-              className="w-full h-full border-0 absolute inset-0"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              allowFullScreen
-            />
+            {(() => {
+              const initialStartSeconds =
+                playback.state === 'playing' && playback.anchor_time
+                  ? Math.max(
+                      0,
+                      Math.floor(
+                        playback.position_seconds +
+                          ((Date.now() - new Date(playback.anchor_time).getTime()) / 1000) *
+                            (playback.playback_rate || 1)
+                      )
+                    )
+                  : Math.max(0, Math.floor(playback.position_seconds || 0));
+
+              return (
+                <>
+                  <iframe
+                    ref={iframeRef}
+                    key={playback.video_id}
+                    src={`https://www.youtube-nocookie.com/embed/${playback.video_id}?enablejsapi=1&autoplay=1&mute=0&start=${initialStartSeconds}&controls=1&rel=0&playsinline=1&modestbranding=1&origin=${encodeURIComponent(
+                      window.location.origin
+                    )}`}
+                    title={currentSongTitle}
+                    className="w-full h-full border-0 absolute inset-0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                  />
+
+                  {/* 1-Tap Overlay for Newcomers or Mobile Autoplay Block */}
+                  {playback.state === 'playing' && !userInteracted && (
+                    <button
+                      type="button"
+                      onClick={handleUserTapToSync}
+                      className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/65 backdrop-blur-xs transition cursor-pointer hover:bg-black/50 group select-none"
+                    >
+                      <div className="px-5 py-3 rounded-2xl bg-gradient-to-r from-primary to-accent hover:scale-105 active:scale-95 text-bg-base font-extrabold flex items-center space-x-2.5 shadow-2xl animate-pulse transition-all">
+                        <Play className="w-6 h-6 fill-bg-base" />
+                        <span className="text-xs sm:text-sm font-black uppercase tracking-wider">
+                          Chạm để nghe nhạc cùng phòng
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-white/90 mt-2 font-medium">
+                        Phòng đang phát nhạc trực tiếp — Chạm để đồng bộ âm thanh ngay
+                      </p>
+                    </button>
+                  )}
+                </>
+              );
+            })()}
           </div>
         ) : (
           // EMPTY STATE: Search & Direct Play

@@ -14,18 +14,18 @@ export function useHandRaise(roomId?: string) {
 
   const raiseHand = useCallback(() => {
     if (!roomId) return;
-    socket.emit('hand:raise', { room_id: roomId });
+    socket.emit('hand:raise', { roomId, room_id: roomId });
   }, [socket, roomId]);
 
   const cancelHand = useCallback(() => {
     if (!roomId || !myRequest) return;
-    socket.emit('hand:cancel', { room_id: roomId, request_id: myRequest.id });
+    socket.emit('hand:cancel', { roomId, room_id: roomId, requestId: myRequest.id, request_id: myRequest.id });
   }, [socket, roomId, myRequest]);
 
   const approveHand = useCallback(
     (requestId: string) => {
       if (!roomId) return;
-      socket.emit('hand:approve', { room_id: roomId, request_id: requestId });
+      socket.emit('hand:approve', { roomId, room_id: roomId, requestId, request_id: requestId });
     },
     [socket, roomId]
   );
@@ -33,7 +33,7 @@ export function useHandRaise(roomId?: string) {
   const rejectHand = useCallback(
     (requestId: string) => {
       if (!roomId) return;
-      socket.emit('hand:reject', { room_id: roomId, request_id: requestId });
+      socket.emit('hand:reject', { roomId, room_id: roomId, requestId, request_id: requestId });
     },
     [socket, roomId]
   );
@@ -41,7 +41,7 @@ export function useHandRaise(roomId?: string) {
   const acceptStageInvite = useCallback(
     (inviteId: string) => {
       if (!roomId) return;
-      socket.emit('stage:accept', { room_id: roomId, invite_id: inviteId });
+      socket.emit('stage:accept', { roomId, room_id: roomId, inviteId, invite_id: inviteId });
       store.setStageInvite(null);
     },
     [socket, roomId, store]
@@ -50,7 +50,7 @@ export function useHandRaise(roomId?: string) {
   const declineStageInvite = useCallback(
     (inviteId: string) => {
       if (!roomId) return;
-      socket.emit('stage:decline', { room_id: roomId, invite_id: inviteId });
+      socket.emit('stage:decline', { roomId, room_id: roomId, inviteId, invite_id: inviteId });
       store.setStageInvite(null);
     },
     [socket, roomId, store]
@@ -58,7 +58,7 @@ export function useHandRaise(roomId?: string) {
 
   const leaveStage = useCallback(() => {
     if (!roomId || !user) return;
-    socket.emit('stage:remove_self', { room_id: roomId });
+    socket.emit('stage:remove_self', { roomId, room_id: roomId, targetUserId: user.id });
   }, [socket, roomId, user]);
 
   return { raiseHand, cancelHand, approveHand, rejectHand, acceptStageInvite, declineStageInvite, leaveStage, myRequest };

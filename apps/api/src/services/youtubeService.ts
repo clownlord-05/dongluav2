@@ -13,19 +13,20 @@ export function loadVideo(
   title?: string
 ): RoomPlayback {
   const db = getDb();
+  const nowIso = new Date().toISOString();
   db.prepare(`
     INSERT INTO room_playback (room_id, video_id, title, state, position_seconds, anchor_time, playback_rate, updated_by, updated_at)
-    VALUES (?, ?, ?, 'paused', 0, datetime('now'), 1.0, ?, datetime('now'))
+    VALUES (?, ?, ?, 'paused', 0, ?, 1.0, ?, ?)
     ON CONFLICT(room_id) DO UPDATE SET
       video_id = excluded.video_id,
       title = excluded.title,
       state = 'paused',
       position_seconds = 0,
-      anchor_time = datetime('now'),
+      anchor_time = excluded.anchor_time,
       playback_rate = 1.0,
       updated_by = excluded.updated_by,
-      updated_at = datetime('now')
-  `).run(roomId, videoId, title || null, updatedBy);
+      updated_at = excluded.updated_at
+  `).run(roomId, videoId, title || null, nowIso, updatedBy, nowIso);
   return getPlayback(roomId)!;
 }
 
@@ -36,16 +37,17 @@ export function playAt(
   playbackRate = 1.0
 ): RoomPlayback {
   const db = getDb();
+  const nowIso = new Date().toISOString();
   db.prepare(`
     UPDATE room_playback SET
       state = 'playing',
       position_seconds = ?,
-      anchor_time = datetime('now'),
+      anchor_time = ?,
       playback_rate = ?,
       updated_by = ?,
-      updated_at = datetime('now')
+      updated_at = ?
     WHERE room_id = ?
-  `).run(positionSeconds, playbackRate, updatedBy, roomId);
+  `).run(positionSeconds, nowIso, playbackRate, updatedBy, nowIso, roomId);
   return getPlayback(roomId)!;
 }
 
@@ -55,15 +57,16 @@ export function pauseAt(
   updatedBy: string
 ): RoomPlayback {
   const db = getDb();
+  const nowIso = new Date().toISOString();
   db.prepare(`
     UPDATE room_playback SET
       state = 'paused',
       position_seconds = ?,
-      anchor_time = datetime('now'),
+      anchor_time = ?,
       updated_by = ?,
-      updated_at = datetime('now')
+      updated_at = ?
     WHERE room_id = ?
-  `).run(positionSeconds, updatedBy, roomId);
+  `).run(positionSeconds, nowIso, updatedBy, nowIso, roomId);
   return getPlayback(roomId)!;
 }
 
@@ -73,21 +76,27 @@ export function seekTo(
   updatedBy: string
 ): RoomPlayback {
   const db = getDb();
-  // Preserve current play/pause state, just update position
+  const nowIso = new Date().toISOString();
   db.prepare(`
     UPDATE room_playback SET
       position_seconds = ?,
-      anchor_time = datetime('now'),
+      anchor_time = ?,
       updated_by = ?,
-      updated_at = datetime('now')
+      updated_at = ?
     WHERE room_id = ?
-  `).run(positionSeconds, updatedBy, roomId);
+  `).run(positionSeconds, nowIso, updatedBy, nowIso, roomId);
   return getPlayback(roomId)!;
 }
 
 export function computeCurrentPosition(pb: RoomPlayback): number {
   if (pb.state !== 'playing') return pb.position_seconds;
-  const anchorMs = new Date(pb.anchor_time).getTime();
-  const elapsedSec = (Date.now() - anchorMs) / 1000;
-  return pb.position_seconds + elapsedSec * pb.playback_rate;
+  let anchorStr = pb.anchor_time || '';
+  // Ensure UTC parsing if SQLite returned local datetime format without Z
+  if (anchorStr && !anchorStr.endsWith('Z') && !anchorStr.includes('+')) {
+    anchorStr = anchorStr.replace(' ', 'T') + 'Z';
+  }
+  const anchorMs = new Date(anchorStr).getTime();
+  if (isNaN(anchorMs)) return pb.position_seconds;
+  const elapsedSec = Math.max(0, (Date.now() - anchorMs) / 1000);
+  return Math.max(0, pb.position_seconds + elapsedSec * (pb.playback_rate || 1.0));
 }

@@ -74,7 +74,15 @@ export const KaraokeRoomPage: React.FC = () => {
           store.setTotalMemberCount((data as any).memberCount || (data as any).totalMembers);
         }
         if ((data as any).playback) {
-          store.setPlayback((data as any).playback);
+          const pb = (data as any).playback;
+          store.setPlayback({
+            video_id: pb.video_id,
+            title: pb.title || 'Karaoke Beat',
+            state: pb.state || 'paused',
+            position_seconds: pb.current_position ?? pb.position_seconds ?? 0,
+            playback_rate: pb.playback_rate || 1,
+            anchor_time: new Date().toISOString(),
+          });
         }
       })
       .catch((err) => {
@@ -128,6 +136,11 @@ export const KaraokeRoomPage: React.FC = () => {
       store.updateMember(data.user_id, { role: 'SPEAKER' as any });
       if (data.user_id === user?.id) {
         captureRaw(selectedDeviceId);
+        // Prompt banner on BottomBar so 1-tap grant works if browser blocked async getUserMedia
+        store.setStageInvite({
+          invite_id: 'stage_active',
+          invited_by_name: 'Chủ phòng',
+        });
       }
     };
 
@@ -197,7 +210,7 @@ export const KaraokeRoomPage: React.FC = () => {
           video_id: vid,
           title: data.title || 'Karaoke Beat',
           state: data.state || 'paused',
-          position_seconds: data.current_position || 0,
+          position_seconds: data.current_position ?? data.position_seconds ?? 0,
           playback_rate: data.playback_rate || 1,
           anchor_time: new Date().toISOString(),
         });
@@ -342,36 +355,39 @@ export const KaraokeRoomPage: React.FC = () => {
   // Hand raise actions
   const handleRaiseHand = () => {
     if (!roomId || !socket) return;
-    socket.emit('hand:raise', { roomId });
+    socket.emit('hand:raise', { roomId, room_id: roomId });
   };
 
   const handleCancelHand = () => {
     if (!roomId || !socket) return;
     const req = store.handQueue.find((h) => h.user_id === user?.id && h.status === 'pending');
     if (req) {
-      socket.emit('hand:cancel', { roomId, requestId: req.id });
+      socket.emit('hand:cancel', { roomId, room_id: roomId, requestId: req.id, request_id: req.id });
     }
   };
 
   const handleApproveHand = (requestId: string) => {
     if (!roomId || !socket) return;
-    socket.emit('hand:approve', { roomId, requestId });
+    socket.emit('hand:approve', { roomId, room_id: roomId, requestId, request_id: requestId });
   };
 
   const handleRejectHand = (requestId: string) => {
     if (!roomId || !socket) return;
-    socket.emit('hand:reject', { roomId, requestId });
+    socket.emit('hand:reject', { roomId, room_id: roomId, requestId, request_id: requestId });
   };
 
   const handleAcceptStageInvite = async () => {
     store.setStageInvite(null);
+    if (socket && roomId) {
+      socket.emit('stage:accept', { roomId, room_id: roomId });
+    }
     await captureRaw(selectedDeviceId);
   };
 
   const handleDeclineStageInvite = () => {
     store.setStageInvite(null);
     if (!roomId || !socket) return;
-    socket.emit('stage:decline', { roomId });
+    socket.emit('stage:decline', { roomId, room_id: roomId });
   };
 
   const handleToggleMic = () => {
@@ -385,6 +401,7 @@ export const KaraokeRoomPage: React.FC = () => {
     if (roomId && socket && user) {
       socket.emit(newMuted ? 'audio:mute' : 'audio:unmute', {
         roomId,
+        room_id: roomId,
         targetUserId: user.id,
       });
     }
@@ -393,7 +410,7 @@ export const KaraokeRoomPage: React.FC = () => {
   const handleLeaveStage = () => {
     if (!roomId || !socket || !user) return;
     stopCapture();
-    socket.emit('stage:remove_speaker', { roomId, targetUserId: user.id });
+    socket.emit('stage:remove_self', { roomId, room_id: roomId, targetUserId: user.id });
   };
 
   const handleLeaveRoom = () => {
