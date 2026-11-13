@@ -151,6 +151,9 @@ export const KaraokeRoomPage: React.FC = () => {
       useRoomStore.getState().updateMember(data.user_id, { muted: data.muted });
       if (data.user_id === useAuthStore.getState().user?.id) {
         setMuted(data.muted);
+        if (data.muted) {
+          stopCapture();
+        }
       }
     };
 
@@ -445,8 +448,10 @@ export const KaraokeRoomPage: React.FC = () => {
   const handleToggleMic = useCallback(async () => {
     const audioState = useAudioStore.getState();
     const uid = useAuthStore.getState().user?.id;
-    // If stream hasn't been captured yet, first click ALWAYS captures and unmutes immediately!
-    if (!audioState.stream) {
+    const isCurrentlyLive = !audioState.isMuted && !!audioState.stream;
+
+    if (!isCurrentlyLive) {
+      // Turn Mic ON: capture hardware mic in Media Mode (Loudspeaker) & unmute
       setMuted(false);
       await captureRaw(audioState.selectedDeviceId);
       if (roomId && socket && uid) {
@@ -456,19 +461,19 @@ export const KaraokeRoomPage: React.FC = () => {
           targetUserId: uid,
         });
       }
-      return;
+    } else {
+      // Turn Mic OFF: completely release hardware mic track so OS immediately frees audio session!
+      setMuted(true);
+      stopCapture();
+      if (roomId && socket && uid) {
+        socket.emit('audio:mute', {
+          roomId,
+          room_id: roomId,
+          targetUserId: uid,
+        });
+      }
     }
-
-    const newMuted = !audioState.isMuted;
-    setMuted(newMuted);
-    if (roomId && socket && uid) {
-      socket.emit(newMuted ? 'audio:mute' : 'audio:unmute', {
-        roomId,
-        room_id: roomId,
-        targetUserId: uid,
-      });
-    }
-  }, [roomId, socket, captureRaw, setMuted]);
+  }, [roomId, socket, captureRaw, stopCapture, setMuted]);
 
   const handleLeaveStage = useCallback(() => {
     const uid = useAuthStore.getState().user?.id;

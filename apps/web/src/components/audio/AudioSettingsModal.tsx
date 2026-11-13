@@ -124,9 +124,9 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({ isOpen, 
         source.connect(analyser);
         analyserRef.current = analyser;
 
-        // Direct voice loopback so the user hears exactly what the mic captures in real time
+        // Direct voice loopback so the user hears every tiny whisper and high note in real time (1.5x pure studio preamp)
         const loopGain = ctx.createGain();
-        const currentGain = useAudioStore.getState().gain ?? 1.0;
+        const currentGain = (useAudioStore.getState().gain ?? 1.0) * 1.5;
         loopGain.gain.value = isLoopback ? currentGain : 0.0;
         source.connect(loopGain);
         loopGain.connect(ctx.destination);
@@ -203,14 +203,14 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({ isOpen, 
     const next = !isLoopback;
     setIsLoopback(next);
     if (loopbackGainRef.current) {
-      loopbackGainRef.current.gain.value = next ? gain : 0.0;
+      loopbackGainRef.current.gain.value = next ? gain * 1.5 : 0.0;
     }
   };
 
   const handleGainChange = (newGain: number) => {
     setGain(newGain);
     if (loopbackGainRef.current && isLoopback) {
-      loopbackGainRef.current.gain.value = newGain;
+      loopbackGainRef.current.gain.value = newGain * 1.5;
     }
   };
 

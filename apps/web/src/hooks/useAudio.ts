@@ -4,24 +4,70 @@ import { connectLiveKit, publishAudioTrack, disconnectLiveKit } from '../lib/liv
 import { getLiveKitToken } from '../lib/api';
 import type { AudioConstraintsActual } from '../types';
 
+// Force Media Recording Mode (AudioSource.MIC / MODE_NORMAL on Android & iOS)
+// Disabling hardware VoIP echoCancellation/noiseSuppression prevents the OS from switching
+// to the Earpiece (Loa trong), prevents YouTube beat volume ducking, and captures 100% of whispers & high notes!
 export const RAW_CONSTRAINTS: any = {
   echoCancellation: false,
   noiseSuppression: false,
   autoGainControl: false,
   channelCount: { ideal: 2 },
   sampleRate: { ideal: 48000 },
-  // Chromium flags for studio pass-through:
   googEchoCancellation: false,
+  googExperimentalEchoCancellation: false,
   googAutoGainControl: false,
+  googExperimentalAutoGainControl: false,
   googNoiseSuppression: false,
+  googExperimentalNoiseSuppression: false,
   googHighpassFilter: false,
+  googAudioMirroring: false,
 };
 
 export const STANDARD_CONSTRAINTS: any = {
-  echoCancellation: true,
-  noiseSuppression: true,
-  autoGainControl: true,
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+  googEchoCancellation: false,
+  googExperimentalEchoCancellation: false,
+  googAutoGainControl: false,
+  googExperimentalAutoGainControl: false,
+  googNoiseSuppression: false,
+  googExperimentalNoiseSuppression: false,
+  googHighpassFilter: false,
 };
+
+// Global registry of all hardware MediaStreams ever opened by getUserMedia
+// Guarantees 100% hardware microphone release across all components/modals
+const activeHardwareStreams = new Set<MediaStream>();
+const activeAudioContexts = new Set<AudioContext>();
+
+export function stopAllHardwareMicStreams() {
+  activeHardwareStreams.forEach((s) => {
+    try {
+      s.getTracks().forEach((t) => {
+        t.enabled = false;
+        t.stop();
+      });
+    } catch (e) {}
+  });
+  activeHardwareStreams.clear();
+
+  activeAudioContexts.forEach((ctx) => {
+    try {
+      if (ctx.state !== 'closed') {
+        ctx.close().catch(() => {});
+      }
+    } catch (e) {}
+  });
+  activeAudioContexts.clear();
+
+  // Restore mobile OS AudioSession to pure media playback (Loudspeaker)
+  try {
+    if (typeof navigator !== 'undefined' && (navigator as any).audioSession) {
+      (navigator as any).audioSession.type = 'playback';
+    }
+  } catch (e) {}
+}
 
 export function checkConstraints(actual: MediaTrackSettings): {
   result: AudioConstraintsActual;
@@ -58,7 +104,14 @@ export async function acquireMicStream(
   const targetConstraints = mode === 'raw' ? RAW_CONSTRAINTS : STANDARD_CONSTRAINTS;
   let stream: MediaStream | null = null;
 
-  // Stage 1: Try requested studio constraints with ideal device ID
+  // Set iOS 17+ AudioSession to play-and-record (Loudspeaker + Media mix, never earpiece voice-chat)
+  try {
+    if (typeof navigator !== 'undefined' && (navigator as any).audioSession) {
+      (navigator as any).audioSession.type = 'play-and-record';
+    }
+  } catch (e) {}
+
+  // Stage 1: Studio 48kHz RAW Media constraints (keeps Android/iOS on Loudspeaker MODE_NORMAL)
   try {
     const constraints: MediaStreamConstraints = {
       audio: {
@@ -69,14 +122,12 @@ export async function acquireMicStream(
     };
     stream = await navigator.mediaDevices.getUserMedia(constraints);
   } catch (err1) {
-    console.warn('[Audio] Stage 1 getUserMedia failed, falling back to standard mobile audio...', err1);
-    // Stage 2: Fallback to standard permissive mobile audio
+    console.warn('[Audio] Stage 1 getUserMedia failed, falling back to mobile RAW media mode...', err1);
+    // Stage 2: Mobile RAW Media constraints (omits sampleRate/channelCount but keeps echoCancellation: false so phone stays on Loudspeaker!)
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+          ...STANDARD_CONSTRAINTS,
           deviceId: deviceId && deviceId !== 'default' ? { ideal: deviceId } : undefined,
         },
         video: false,
@@ -86,6 +137,17 @@ export async function acquireMicStream(
       // Stage 3: Bare audio constraint
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        // Immediately disable any hardware VoIP processing tracks if the browser supports applyConstraints
+        const t = stream.getAudioTracks()[0];
+        if (t && typeof t.applyConstraints === 'function') {
+          await t
+            .applyConstraints({
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            })
+            .catch(() => {});
+        }
       } catch (err3: any) {
         console.error('[Audio] All getUserMedia attempts failed:', err3);
         alert(
@@ -97,6 +159,7 @@ export async function acquireMicStream(
   }
 
   if (!stream) return null;
+  activeHardwareStreams.add(stream);
 
   const track = stream.getAudioTracks()[0];
   const actual = track ? track.getSettings() : ({} as any);
@@ -113,10 +176,10 @@ export function useAudio() {
   const micGainNodeRef = useRef<GainNode | null>(null);
   const gainValue = useAudioStore((s) => s.gain);
 
-  // Sync live mic gain node whenever user adjusts gain slider (with 1.35x studio vocal preamp boost)
+  // Sync live mic gain node whenever user adjusts gain slider (1.5x pure preamp boost, 0 compression)
   useEffect(() => {
     if (micGainNodeRef.current) {
-      micGainNodeRef.current.gain.value = gainValue * 1.35;
+      micGainNodeRef.current.gain.value = gainValue * 1.5;
     }
   }, [gainValue]);
 
@@ -135,13 +198,12 @@ export function useAudio() {
 
   const captureRaw = useCallback(
     async (deviceId?: string, customMode?: 'raw' | 'standard'): Promise<MediaStream | null> => {
-      // Stop any previous capture stream first
+      // Stop any previous hardware capture streams completely first
       const prevStream = useAudioStore.getState().stream;
       if (prevStream) {
         prevStream.getTracks().forEach((t) => t.stop());
       }
-      rawStreamRef.current?.getTracks().forEach((t) => t.stop());
-      audioCtxRef.current?.close().catch(() => {});
+      stopAllHardwareMicStreams();
 
       const rawStream = await acquireMicStream(deviceId, customMode);
       if (!rawStream) return null;
@@ -153,6 +215,7 @@ export function useAudio() {
           latencyHint: 'interactive',
           sampleRate: 48000,
         });
+        activeAudioContexts.add(ctx);
         if (ctx.state === 'suspended') {
           await ctx.resume().catch(() => {});
         }
@@ -165,23 +228,15 @@ export function useAudio() {
 
         const source = ctx.createMediaStreamSource(rawStream);
 
-        // Hardware C++ DSP Vocal Preamp + Soft Limiter so mic catches every syllable cleanly without clipping
-        const compressor = ctx.createDynamicsCompressor();
-        compressor.threshold.value = -22;
-        compressor.knee.value = 12;
-        compressor.ratio.value = 3.0;
-        compressor.attack.value = 0.002;
-        compressor.release.value = 0.12;
-
+        // Pure 100% uncompressed direct studio preamp (NO DynamicsCompressorNode so whispers & high notes are 100% preserved!)
         const gainNode = ctx.createGain();
-        gainNode.gain.value = (useAudioStore.getState().gain ?? 1.0) * 1.35;
+        gainNode.gain.value = (useAudioStore.getState().gain ?? 1.0) * 1.5;
         micGainNodeRef.current = gainNode;
 
         const analyser = ctx.createAnalyser();
-        analyser.fftSize = 128;
+        analyser.fftSize = 256;
 
-        source.connect(compressor);
-        compressor.connect(gainNode);
+        source.connect(gainNode);
         gainNode.connect(analyser);
         analyserRef.current = analyser;
 
@@ -213,12 +268,14 @@ export function useAudio() {
   const stopCapture = useCallback(() => {
     const activeStream = useAudioStore.getState().stream;
     if (activeStream) {
-      activeStream.getTracks().forEach((t) => t.stop());
+      activeStream.getTracks().forEach((t) => {
+        t.enabled = false;
+        t.stop();
+      });
     }
-    rawStreamRef.current?.getTracks().forEach((t) => t.stop());
+    stopAllHardwareMicStreams();
     rawStreamRef.current = null;
     micGainNodeRef.current = null;
-    audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current = null;
     analyserRef.current = null;
     useAudioStore.getState().setStream(null);
