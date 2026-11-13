@@ -1,14 +1,13 @@
 import React from 'react';
 import { useAuthStore } from '../../store/authStore';
 import Avatar from './Avatar';
-import { Flame, Plus, LogIn, Settings, Heart } from 'lucide-react';
+import { Flame, Plus, LogIn, Settings } from 'lucide-react';
 
 interface HeaderProps {
   onCreateRoom?: () => void;
   onJoinRoom?: () => void;
   onOpenSettings?: () => void;
   onOpenProfile?: () => void;
-  onOpenAbout?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -16,7 +15,6 @@ export const Header: React.FC<HeaderProps> = ({
   onJoinRoom,
   onOpenSettings,
   onOpenProfile,
-  onOpenAbout,
 }) => {
   const user = useAuthStore((s) => s.user);
 
@@ -61,17 +59,6 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <LogIn className="w-4 h-4 text-accent" />
             <span>Nhập mã</span>
-          </button>
-        )}
-
-        {onOpenAbout && (
-          <button
-            onClick={onOpenAbout}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-extrabold transition-all cursor-pointer"
-            title="Giới Thiệu và Góp Ý"
-          >
-            <Heart className="w-3.5 h-3.5 fill-rose-400 text-rose-400 animate-pulse" />
-            <span className="hidden sm:inline">Giới Thiệu và Góp Ý</span>
           </button>
         )}
 

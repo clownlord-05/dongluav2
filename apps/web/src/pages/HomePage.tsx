@@ -45,7 +45,6 @@ export const HomePage: React.FC = () => {
         onJoinRoom={() => setShowJoinModal(true)}
         onOpenSettings={() => setShowAudioSettings(true)}
         onOpenProfile={() => setShowNicknameModal(true)}
-        onOpenAbout={() => setShowAboutModal(true)}
       />
 
       {/* Main Content Area */}
