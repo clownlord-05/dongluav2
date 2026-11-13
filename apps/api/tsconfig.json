@@ -12,7 +12,10 @@
     "sourceMap": true,
     "baseUrl": ".",
     "paths": {
-      "@dongluav2/shared-types": ["../../packages/shared-types/dist/index"]
+      "@dongluav2/shared-types": [
+        "../../packages/shared-types/src/index",
+        "../../packages/shared-types/dist/index"
+      ]
     }
   },
   "include": ["src"],

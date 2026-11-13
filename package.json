@@ -5,7 +5,8 @@
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace=apps/api\" \"npm run dev --workspace=apps/web\"",
-    "build": "npm run build --workspace=apps/api && npm run build --workspace=apps/web",
+    "build": "npm run build --workspace=packages/shared-types && npm run build --workspace=apps/api && npm run build --workspace=apps/web",
+    "build:types": "npm run build --workspace=packages/shared-types",
     "build:api": "npm run build --workspace=apps/api",
     "build:web": "npm run build --workspace=apps/web",
     "start": "npm run start --workspace=apps/api",
