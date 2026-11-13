@@ -53,14 +53,33 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
   onSelectPlayNow,
 }) => {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const store = useYouTubeStore();
+  const setPlayerState = useYouTubeStore((s) => s.setState);
+  const setBuffering = useYouTubeStore((s) => s.setBuffering);
   const playback = useRoomStore((s) => s.playback);
   const beatSyncOffsetMs = useAudioStore((s) => s.beatSyncOffsetMs);
 
   const [localVolume, setLocalVolume] = useState(80);
   const [currentTime, setCurrentTime] = useState(0);
+  const currentTimeRef = useRef(0);
   const [duration, setDuration] = useState(0);
   const [userInteracted, setUserInteracted] = useState(false);
+
+  // Cache initial start second per video_id so iframe src NEVER mutates during playback!
+  const videoStartCacheRef = useRef<{ videoId: string; startSec: number }>({ videoId: '', startSec: 0 });
+  if (playback?.video_id && videoStartCacheRef.current.videoId !== playback.video_id) {
+    const startSec =
+      playback.state === 'playing' && playback.anchor_time
+        ? Math.max(
+            0,
+            Math.floor(
+              playback.position_seconds +
+                ((Date.now() - new Date(playback.anchor_time).getTime()) / 1000) *
+                  (playback.playback_rate || 1)
+            )
+          )
+        : Math.max(0, Math.floor(playback.position_seconds || 0));
+    videoStartCacheRef.current = { videoId: playback.video_id, startSec };
+  }
 
   // Inline YouTube Direct Search states
   const [searchQuery, setSearchQuery] = useState('');
@@ -109,23 +128,29 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         if (data?.event === 'infoDelivery' && data.info) {
           if (typeof data.info.currentTime === 'number') {
-            setCurrentTime(data.info.currentTime);
+            const newTime = data.info.currentTime;
+            const prevFloor = Math.floor(currentTimeRef.current);
+            currentTimeRef.current = newTime;
+            // Only trigger React state update once per integer second to avoid 10fps re-renders
+            if (Math.floor(newTime) !== prevFloor) {
+              setCurrentTime(newTime);
+            }
           }
           if (typeof data.info.duration === 'number' && data.info.duration > 0) {
-            setDuration(data.info.duration);
+            setDuration((prev) => (Math.floor(prev) !== Math.floor(data.info.duration) ? data.info.duration : prev));
           }
           if (typeof data.info.playerState === 'number') {
             // -1: unstarted, 0: ended, 1: playing, 2: paused, 3: buffering, 5: cued
             if (data.info.playerState === 1) {
-              store.setState('playing');
-              store.setBuffering(false);
+              setPlayerState('playing');
+              setBuffering(false);
               setUserInteracted(true);
             } else if (data.info.playerState === 2) {
-              store.setState('paused');
+              setPlayerState('paused');
             } else if (data.info.playerState === 3) {
-              store.setBuffering(true);
+              setBuffering(true);
             } else if (data.info.playerState === 0) {
-              store.setState('ended');
+              setPlayerState('ended');
               if (isHost && onPlayNext) onPlayNext();
             }
           }
@@ -137,7 +162,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
 
     window.addEventListener('message', handleWindowMessage);
     return () => window.removeEventListener('message', handleWindowMessage);
-  }, [isHost, onPlayNext]);
+  }, [isHost, onPlayNext, setPlayerState, setBuffering]);
 
   // 1. Immediate sync on playback state or seek change from server
   useEffect(() => {
@@ -156,10 +181,12 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
           : 0;
       const rate = playback.playback_rate || 1;
       const targetPos = Math.max(0, playback.position_seconds + elapsed * rate + beatSyncOffsetMs / 1000);
-      
-      // Tight 0.25s drift check on direct state/seek trigger
-      if (Math.abs(currentTime - targetPos) > 0.25) {
+
+      // Tight 0.35s drift check on direct state/seek trigger
+      if (Math.abs(currentTimeRef.current - targetPos) > 0.35) {
         postIframeCommand('seekTo', [targetPos, true]);
+        currentTimeRef.current = targetPos;
+        setCurrentTime(targetPos);
       }
     }
   }, [
@@ -181,13 +208,14 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
       const elapsed = (now - anchor) / 1000;
       const rate = playback.playback_rate || 1;
       const targetPos = Math.max(0, playback.position_seconds + elapsed * rate + beatSyncOffsetMs / 1000);
-      const drift = currentTime - targetPos;
+      const drift = currentTimeRef.current - targetPos;
 
-      // Keep beat locked within 350ms of host / singer
-      if (Math.abs(drift) > 0.35) {
+      // Keep beat locked within 450ms of host / singer
+      if (Math.abs(drift) > 0.45) {
         postIframeCommand('seekTo', [targetPos, true]);
+        currentTimeRef.current = targetPos;
       }
-    }, 1500);
+    }, 2500);
 
     return () => clearInterval(interval);
   }, [
@@ -197,7 +225,6 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
     playback?.position_seconds,
     playback?.anchor_time,
     playback?.playback_rate,
-    currentTime,
     beatSyncOffsetMs,
   ]);
 
@@ -211,7 +238,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
     postIframeCommand('playVideo');
     const socket = (window as any).__SOCKET__;
     if (socket) {
-      socket.emit('youtube:play_at', { roomId, position: currentTime });
+      socket.emit('youtube:play_at', { roomId, position: currentTimeRef.current });
     }
   };
 
@@ -220,13 +247,14 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
     postIframeCommand('pauseVideo');
     const socket = (window as any).__SOCKET__;
     if (socket) {
-      socket.emit('youtube:pause', { roomId, position: currentTime });
+      socket.emit('youtube:pause', { roomId, position: currentTimeRef.current });
     }
   };
 
   const handleHostSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!isHost || !playback?.video_id) return;
     const newPos = parseFloat(e.target.value);
+    currentTimeRef.current = newPos;
     setCurrentTime(newPos);
     postIframeCommand('seekTo', [newPos, true]);
     const socket = (window as any).__SOCKET__;
@@ -376,17 +404,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
           // ACTIVE VIDEO IFRAME (Direct Embed, Guaranteed to Render)
           <div className="w-full h-full relative bg-black">
             {(() => {
-              const initialStartSeconds =
-                playback.state === 'playing' && playback.anchor_time
-                  ? Math.max(
-                      0,
-                      Math.floor(
-                        playback.position_seconds +
-                          ((Date.now() - new Date(playback.anchor_time).getTime()) / 1000) *
-                            (playback.playback_rate || 1)
-                      )
-                    )
-                  : Math.max(0, Math.floor(playback.position_seconds || 0));
+              const initialStartSeconds = videoStartCacheRef.current.startSec;
 
               return (
                 <>
@@ -780,4 +798,4 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
   );
 };
 
-export default YouTubePlayer;
+export default React.memo(YouTubePlayer);

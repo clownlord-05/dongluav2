@@ -963,4 +963,4 @@ export const RoomSidebar: React.FC<RoomSidebarProps> = ({
   );
 };
 
-export default RoomSidebar;
+export default React.memo(RoomSidebar);

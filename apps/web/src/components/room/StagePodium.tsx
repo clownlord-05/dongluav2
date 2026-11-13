@@ -199,4 +199,4 @@ export const StagePodium: React.FC<StagePodiumProps> = ({
   );
 };
 
-export default StagePodium;
+export default React.memo(StagePodium);

@@ -125,7 +125,7 @@ export const KaraokeRoomPage: React.FC = () => {
 
     const handleMuteChanged = (data: { user_id: string; muted: boolean }) => {
       store.updateMember(data.user_id, { muted: data.muted });
-      if (data.user_id === user?.id) {
+      if (data.user_id === useAuthStore.getState().user?.id) {
         setMuted(data.muted);
       }
     };
@@ -136,8 +136,8 @@ export const KaraokeRoomPage: React.FC = () => {
 
     const handleStageParticipantAdded = (data: { user_id: string; role: string }) => {
       store.updateMember(data.user_id, { role: 'SPEAKER' as any });
-      if (data.user_id === user?.id) {
-        captureRaw(selectedDeviceId);
+      if (data.user_id === useAuthStore.getState().user?.id) {
+        captureRaw(useAudioStore.getState().selectedDeviceId);
         // Prompt banner on BottomBar so 1-tap grant works if browser blocked async getUserMedia
         store.setStageInvite({
           invite_id: 'stage_active',
@@ -148,7 +148,7 @@ export const KaraokeRoomPage: React.FC = () => {
 
     const handleStageParticipantRemoved = (data: { user_id: string; new_role: string }) => {
       store.updateMember(data.user_id, { role: data.new_role as any });
-      if (data.user_id === user?.id) {
+      if (data.user_id === useAuthStore.getState().user?.id) {
         stopCapture();
       }
     };
@@ -293,7 +293,7 @@ export const KaraokeRoomPage: React.FC = () => {
         display_name: data.display_name,
         avatar_seed: data.avatar_seed,
       });
-      if (data.user_id === user?.id) {
+      if (data.user_id === useAuthStore.getState().user?.id) {
         useAuthStore.getState().updateUser({
           display_name: data.display_name,
           avatar_seed: data.avatar_seed,
@@ -352,7 +352,7 @@ export const KaraokeRoomPage: React.FC = () => {
       socket.off('room:banned', handleBanned);
       socket.off('room:closed', handleRoomClosed);
     };
-  }, [socket, roomId, token, user, selectedDeviceId]);
+  }, [socket, roomId, token]);
 
   // Hand raise actions
   const handleRaiseHand = () => {

@@ -206,4 +206,4 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   );
 };
 
-export default BottomBar;
+export default React.memo(BottomBar);
