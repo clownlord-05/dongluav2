@@ -7,8 +7,8 @@ import NicknameModal from '../components/common/NicknameModal';
 import AudioSettingsModal from '../components/audio/AudioSettingsModal';
 import CreateRoomModal from './CreateRoomModal';
 import JoinRoomModal from './JoinRoomModal';
-import Avatar from '../components/common/Avatar';
-import { Flame, Mic2, Users, Lock, Globe, Plus, Sparkles, RefreshCw } from 'lucide-react';
+import { AboutContent, AboutModal } from '../components/common/AboutSection';
+import { Flame, Mic2, Users, Lock, Globe, Plus, Sparkles, RefreshCw, Heart } from 'lucide-react';
 
 export const HomePage: React.FC = () => {
   const navigate = useNavigate();
@@ -18,6 +18,7 @@ export const HomePage: React.FC = () => {
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [showNicknameModal, setShowNicknameModal] = useState(false);
   const [showAudioSettings, setShowAudioSettings] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
 
   const fetchRooms = async () => {
     try {
@@ -44,6 +45,7 @@ export const HomePage: React.FC = () => {
         onJoinRoom={() => setShowJoinModal(true)}
         onOpenSettings={() => setShowAudioSettings(true)}
         onOpenProfile={() => setShowNicknameModal(true)}
+        onOpenAbout={() => setShowAboutModal(true)}
       />
 
       {/* Main Content Area */}
@@ -86,6 +88,14 @@ export const HomePage: React.FC = () => {
               >
                 <Sparkles className="w-4 h-4" />
                 <span>Vào bằng Mã Phòng</span>
+              </button>
+
+              <button
+                onClick={() => setShowAboutModal(true)}
+                className="px-5 py-3 rounded-2xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 text-xs font-extrabold flex items-center space-x-2 transition cursor-pointer"
+              >
+                <Heart className="w-4 h-4 fill-rose-400 text-rose-400" />
+                <span>Giới Thiệu &amp; Donate</span>
               </button>
             </div>
           </div>
@@ -174,6 +184,9 @@ export const HomePage: React.FC = () => {
             </div>
           )}
         </div>
+
+        {/* Giới Thiệu Chung, Góp Ý & Donate Section */}
+        <AboutContent />
       </main>
 
       {/* Modals */}
@@ -181,6 +194,7 @@ export const HomePage: React.FC = () => {
       <JoinRoomModal isOpen={showJoinModal} onClose={() => setShowJoinModal(false)} />
       <NicknameModal isOpen={showNicknameModal} onClose={() => setShowNicknameModal(false)} />
       <AudioSettingsModal isOpen={showAudioSettings} onClose={() => setShowAudioSettings(false)} />
+      <AboutModal isOpen={showAboutModal} onClose={() => setShowAboutModal(false)} />
     </div>
   );
 };
