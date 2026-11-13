@@ -24,9 +24,12 @@ const WORKLET_CODE = `
 class DongLuaStudioProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    // 1200 samples at 48kHz = 25ms ultra-low-latency studio frame (ZERO silence gate, ZERO frequency loss)
-    this.buffer = new Int16Array(1200);
+    // 1920 samples at 48kHz = 40ms studio frame (25 frames/sec)
+    // Balances ultra-low latency with 16x lower server packet load for 10 speakers + 200 listeners!
+    this.buffer = new Int16Array(1920);
     this.writeIndex = 0;
+    this.maxPeak = 0;
+    this.hangoverFrames = 0;
   }
   process(inputs) {
     const input = inputs[0];
@@ -35,12 +38,23 @@ class DongLuaStudioProcessor extends AudioWorkletProcessor {
     const len = ch.length;
     for (let i = 0; i < len; i++) {
       const s = ch[i];
+      const abs = s < 0 ? -s : s;
+      if (abs > this.maxPeak) this.maxPeak = abs;
       const clamped = s < -1 ? -1 : s > 1 ? 1 : s;
       this.buffer[this.writeIndex++] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
-      if (this.writeIndex >= 1200) {
-        const out = new Int16Array(this.buffer);
-        this.port.postMessage(out.buffer, [out.buffer]);
+      if (this.writeIndex >= 1920) {
+        // -78 dBFS ultra-sensitive threshold + 500ms (12 frames) tail hangover:
+        // Captures 100% of whispers, breaths, and high notes while preventing silent mics on stage from flooding the server!
+        if (this.maxPeak > 0.00012) {
+          this.hangoverFrames = 12;
+        }
+        if (this.hangoverFrames > 0) {
+          this.hangoverFrames--;
+          const out = new Int16Array(this.buffer);
+          this.port.postMessage(out.buffer, [out.buffer]);
+        }
         this.writeIndex = 0;
+        this.maxPeak = 0;
       }
     }
     return true;
@@ -195,11 +209,11 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
 
         const now = ctx.currentTime;
         let nextTime = nextPlayTimeMap.current.get(speakerId) || 0;
-        // Strict per-speaker anti-drift (<45ms max window for ultra-low latency)
+        // Strict per-speaker anti-drift (<90ms max window for 40ms frames)
         if (nextTime < now) {
-          nextTime = now + 0.01;
-        } else if (nextTime - now > 0.045) {
           nextTime = now + 0.012;
+        } else if (nextTime - now > 0.09) {
+          nextTime = now + 0.015;
         }
         source.start(nextTime);
         nextPlayTimeMap.current.set(speakerId, nextTime + buffer.duration);

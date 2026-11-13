@@ -680,13 +680,16 @@ export function initSocket(server: HttpServer): SocketIOServer {
       socket.volatile.to(roomId).emit('audio:level', { user_id: userId, level });
     });
 
-    // Ultra-low-latency volatile binary audio broadcast for 200+ audience members
+    // Ultra-low-latency volatile binary audio broadcast for 10 speakers + 200+ audience members
     socket.on('audio:relay_chunk', ({ roomId, chunk }: { roomId: string; chunk: ArrayBuffer }) => {
       if (!roomId || !chunk) return;
-      socket.volatile.to(roomId).emit('audio:relay_chunk', {
-        speakerId: userId,
-        chunk,
-      });
+      const role = getFastRole(roomId, userId);
+      if (role && role !== 'AUDIENCE' && role !== 'LISTENER') {
+        socket.volatile.to(roomId).emit('audio:relay_chunk', {
+          speakerId: userId,
+          chunk,
+        });
+      }
     });
 
     // Profile & Avatar live update
