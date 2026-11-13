@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useRoomStore } from '../store/roomStore';
 import { useAuthStore } from '../store/authStore';
@@ -17,7 +17,7 @@ import NicknameModal from '../components/common/NicknameModal';
 import Avatar from '../components/common/Avatar';
 import UserContextMenu from '../components/common/UserContextMenu';
 import { useUserContextMenu } from '../hooks/useUserContextMenu';
-import { Flame, Copy, Check, LogOut, Share2, ShieldAlert, MessageSquare, Power, AlertTriangle, Sliders, Headphones } from 'lucide-react';
+import { Flame, Copy, Check, LogOut, Share2, ShieldAlert, MessageSquare, Power, AlertTriangle, Sliders } from 'lucide-react';
 
 export const KaraokeRoomPage: React.FC = () => {
   const { roomId } = useParams<{ roomId: string }>();
@@ -25,19 +25,26 @@ export const KaraokeRoomPage: React.FC = () => {
 
   const user = useAuthStore((s) => s.user);
   const token = useAuthStore((s) => s.token);
-  const store = useRoomStore();
+
+  // Granular Zustand selectors so KaraokeRoomPage NEVER re-renders on chat, song queue, or audience list updates
+  const roomName = useRoomStore((s) => s.room?.name);
+  const roomCode = useRoomStore((s) => s.room?.code);
+  const totalMemberCount = useRoomStore((s) => s.totalMemberCount);
+  const myRole = useRoomStore((s) => s.members.find((m) => m.user_id === user?.id)?.role);
+  const pendingHandCount = useRoomStore(
+    (s) => s.handQueue.filter((h) => h.status === 'pending').length
+  );
+
   const socket = useSocket();
   const { captureRaw, stopCapture } = useAudio();
-  const isMuted = useAudioStore((s) => s.isMuted);
   const setMuted = useAudioStore((s) => s.setMuted);
-  const selectedDeviceId = useAudioStore((s) => s.selectedDeviceId);
 
   const [copied, setCopied] = useState(false);
   const [showAudioSettings, setShowAudioSettings] = useState(false);
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [roomError, setRoomError] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -45,6 +52,11 @@ export const KaraokeRoomPage: React.FC = () => {
     }
     return false;
   });
+  const isSidebarOpenRef = useRef(isSidebarOpen);
+  useEffect(() => {
+    isSidebarOpenRef.current = isSidebarOpen;
+  }, [isSidebarOpen]);
+
   const [mobileViewMode, setMobileViewMode] = useState<'compact' | 'expanded'>('compact');
   const [latestToast, setLatestToast] = useState<{
     id: string;
@@ -55,8 +67,18 @@ export const KaraokeRoomPage: React.FC = () => {
 
   const userContextMenu = useUserContextMenu();
 
-  // Ultra-low latency P2P WebRTC audio mesh for singer & audience
+  // Ultra-low latency Hybrid P2P + AudioWorklet mesh for singer & 200+ audience
   useWebRTCAudio(socket, roomId);
+
+  // Auto-activate microphone when user is OWNER or SPEAKER in the room
+  useEffect(() => {
+    if (myRole === 'OWNER' || myRole === 'SPEAKER') {
+      const { stream, isMuted, selectedDeviceId } = useAudioStore.getState();
+      if (!stream && !isMuted) {
+        captureRaw(selectedDeviceId);
+      }
+    }
+  }, [myRole, captureRaw]);
 
   // Expose socket globally for components needing direct emits
   useEffect(() => {
@@ -67,17 +89,19 @@ export const KaraokeRoomPage: React.FC = () => {
   useEffect(() => {
     if (!roomId) return;
     setLoading(true);
+    const store = useRoomStore.getState();
 
     getRoom(roomId)
       .then(({ data }) => {
-        store.setRoom(data.room);
-        store.setMembers(data.members || []);
+        const s = useRoomStore.getState();
+        s.setRoom(data.room);
+        s.setMembers(data.members || []);
         if ((data as any).memberCount || (data as any).totalMembers) {
-          store.setTotalMemberCount((data as any).memberCount || (data as any).totalMembers);
+          s.setTotalMemberCount((data as any).memberCount || (data as any).totalMembers);
         }
         if ((data as any).playback) {
           const pb = (data as any).playback;
-          store.setPlayback({
+          s.setPlayback({
             video_id: pb.video_id,
             title: pb.title || 'Karaoke Beat',
             state: pb.state || 'paused',
@@ -116,30 +140,35 @@ export const KaraokeRoomPage: React.FC = () => {
     socket.emit('room:join', { roomId });
 
     const handleJoined = (data: any) => {
-      store.addMember(data);
+      useRoomStore.getState().addMember(data);
     };
 
     const handleLeft = (data: { user_id: string }) => {
-      store.removeMember(data.user_id);
+      useRoomStore.getState().removeMember(data.user_id);
     };
 
     const handleMuteChanged = (data: { user_id: string; muted: boolean }) => {
-      store.updateMember(data.user_id, { muted: data.muted });
+      useRoomStore.getState().updateMember(data.user_id, { muted: data.muted });
       if (data.user_id === useAuthStore.getState().user?.id) {
         setMuted(data.muted);
       }
     };
 
     const handleGainChanged = (data: { user_id: string; gain: number }) => {
-      store.updateMember(data.user_id, { gain: data.gain });
+      useRoomStore.getState().updateMember(data.user_id, { gain: data.gain });
+      if (data.user_id === useAuthStore.getState().user?.id) {
+        useAudioStore.getState().setGain(data.gain);
+      }
     };
 
-    const handleStageParticipantAdded = (data: { user_id: string; role: string }) => {
-      store.updateMember(data.user_id, { role: 'SPEAKER' as any });
+    const handleStageParticipantAdded = (data: { user_id: string; role: string; muted?: boolean }) => {
+      const s = useRoomStore.getState();
+      s.updateMember(data.user_id, { role: 'SPEAKER' as any, muted: data.muted ?? false });
       if (data.user_id === useAuthStore.getState().user?.id) {
+        setMuted(false);
         captureRaw(useAudioStore.getState().selectedDeviceId);
         // Prompt banner on BottomBar so 1-tap grant works if browser blocked async getUserMedia
-        store.setStageInvite({
+        s.setStageInvite({
           invite_id: 'stage_active',
           invited_by_name: 'Chủ phòng',
         });
@@ -147,7 +176,7 @@ export const KaraokeRoomPage: React.FC = () => {
     };
 
     const handleStageParticipantRemoved = (data: { user_id: string; new_role: string }) => {
-      store.updateMember(data.user_id, { role: data.new_role as any });
+      useRoomStore.getState().updateMember(data.user_id, { role: data.new_role as any });
       if (data.user_id === useAuthStore.getState().user?.id) {
         stopCapture();
       }
@@ -157,7 +186,7 @@ export const KaraokeRoomPage: React.FC = () => {
     const handleYoutubeLoad = (data: { video_id?: string; videoId?: string; title?: string }) => {
       const vid = data.video_id || data.videoId;
       if (!vid) return;
-      store.setPlayback({
+      useRoomStore.getState().setPlayback({
         video_id: vid,
         title: data.title || 'Karaoke Beat',
         state: 'paused',
@@ -168,10 +197,11 @@ export const KaraokeRoomPage: React.FC = () => {
     };
 
     const handleYoutubePlayAt = (data: { position?: number; position_seconds?: number; playback_rate?: number }) => {
-      const cur = useRoomStore.getState().playback;
+      const s = useRoomStore.getState();
+      const cur = s.playback;
       const pos = data.position ?? data.position_seconds ?? 0;
       if (cur?.video_id) {
-        store.setPlayback({
+        s.setPlayback({
           ...cur,
           state: 'playing',
           position_seconds: pos,
@@ -182,10 +212,11 @@ export const KaraokeRoomPage: React.FC = () => {
     };
 
     const handleYoutubePause = (data: { position?: number; position_seconds?: number }) => {
-      const cur = useRoomStore.getState().playback;
+      const s = useRoomStore.getState();
+      const cur = s.playback;
       const pos = data.position ?? data.position_seconds ?? 0;
       if (cur?.video_id) {
-        store.setPlayback({
+        s.setPlayback({
           ...cur,
           state: 'paused',
           position_seconds: pos,
@@ -194,10 +225,11 @@ export const KaraokeRoomPage: React.FC = () => {
     };
 
     const handleYoutubeSeek = (data: { position?: number; position_seconds?: number }) => {
-      const cur = useRoomStore.getState().playback;
+      const s = useRoomStore.getState();
+      const cur = s.playback;
       const pos = data.position ?? data.position_seconds ?? 0;
       if (cur?.video_id) {
-        store.setPlayback({
+        s.setPlayback({
           ...cur,
           position_seconds: pos,
           anchor_time: new Date().toISOString(),
@@ -208,7 +240,7 @@ export const KaraokeRoomPage: React.FC = () => {
     const handleYoutubeSync = (data: any) => {
       const vid = data?.video_id || data?.videoId;
       if (vid) {
-        store.setPlayback({
+        useRoomStore.getState().setPlayback({
           video_id: vid,
           title: data.title || 'Karaoke Beat',
           state: data.state || 'paused',
@@ -222,33 +254,36 @@ export const KaraokeRoomPage: React.FC = () => {
     // Realtime song queue
     const handleSongAdd = (newSong: any) => {
       if (newSong && newSong.id) {
-        store.addSongToQueue(newSong);
+        useRoomStore.getState().addSongToQueue(newSong);
       }
     };
 
     const handleSongRemove = (data: { song_id?: string; songId?: string }) => {
       const id = data.song_id || data.songId;
       if (id) {
-        store.removeSongFromQueue(id);
+        useRoomStore.getState().removeSongFromQueue(id);
       }
     };
 
     // Realtime chat
     const handleChatMessage = (msg: any) => {
       if (msg) {
-        store.addChatMessage(msg);
-        const sender = msg.displayName || msg.display_name || 'Khách';
-        const text = msg.text || msg.message || '';
-        if (text) {
-          setLatestToast({
-            id: String(Date.now()),
-            sender,
-            text,
-            type: msg.type,
-          });
-          setTimeout(() => {
-            setLatestToast((curr) => (curr?.text === text ? null : curr));
-          }, 4000);
+        useRoomStore.getState().addChatMessage(msg);
+        // Only trigger toast state if sidebar is closed (prevents full-page re-renders during active chat!)
+        if (!isSidebarOpenRef.current) {
+          const sender = msg.displayName || msg.display_name || 'Khách';
+          const text = msg.text || msg.message || '';
+          if (text) {
+            setLatestToast({
+              id: String(Date.now()),
+              sender,
+              text,
+              type: msg.type,
+            });
+            setTimeout(() => {
+              setLatestToast((curr) => (curr?.text === text ? null : curr));
+            }, 3500);
+          }
         }
       }
     };
@@ -256,40 +291,47 @@ export const KaraokeRoomPage: React.FC = () => {
     // Realtime hand queue
     const handleHandUpdated = (req: any) => {
       if (req) {
-        const cur = useRoomStore.getState().handQueue;
+        const s = useRoomStore.getState();
+        const cur = s.handQueue;
         const reqId = req.id || req.request_id;
         const exists = cur.some((h) => h.id === reqId);
         if (exists) {
-          store.updateHandRequest(reqId, req);
+          s.updateHandRequest(reqId, req);
         } else if (req.status === 'pending') {
-          store.setHandQueue([...cur, req]);
+          s.setHandQueue([...cur, req]);
         }
       }
     };
 
     const handleStageInvite = (invite: any) => {
-      store.setStageInvite(invite);
+      if (!invite?.user_id || invite.user_id === useAuthStore.getState().user?.id) {
+        useRoomStore.getState().setStageInvite(invite);
+      }
     };
 
-    const handleKicked = (data: { reason?: string }) => {
-      alert(`Bạn đã bị mời ra khỏi phòng! ${data.reason ? `Lý do: ${data.reason}` : ''}`);
-      navigate('/');
+    const handleKicked = (data: { user_id?: string; reason?: string }) => {
+      if (!data?.user_id || data.user_id === useAuthStore.getState().user?.id) {
+        alert(`Bạn đã bị mời ra khỏi phòng! ${data.reason ? `Lý do: ${data.reason}` : ''}`);
+        navigate('/');
+      }
     };
 
-    const handleBanned = (data: { reason?: string }) => {
-      alert(`Bạn đã bị cấm vào phòng này! ${data.reason ? `Lý do: ${data.reason}` : ''}`);
-      navigate('/');
+    const handleBanned = (data: { user_id?: string; reason?: string }) => {
+      if (!data?.user_id || data.user_id === useAuthStore.getState().user?.id) {
+        alert(`Bạn đã bị cấm vào phòng này! ${data.reason ? `Lý do: ${data.reason}` : ''}`);
+        navigate('/');
+      }
     };
 
     const handleRoomClosed = (data: { room_id?: string; closed_by_name?: string }) => {
       alert(`Chủ phòng (${data?.closed_by_name || 'Host'}) đã đóng phòng hát! Buổi karaoke đã kết thúc. Cảm ơn bạn đã tham gia!`);
       stopCapture();
-      store.clearRoom();
+      useRoomStore.getState().clearRoom();
       navigate('/');
     };
 
     const handleMemberUpdated = (data: { user_id: string; display_name?: string; avatar_seed?: string }) => {
-      store.updateMember(data.user_id, {
+      useRoomStore.getState().updateMember(data.user_id, {
         display_name: data.display_name,
         avatar_seed: data.avatar_seed,
       });
@@ -303,7 +345,7 @@ export const KaraokeRoomPage: React.FC = () => {
 
     const handleMemberCount = (data: { count?: number }) => {
       if (typeof data?.count === 'number') {
-        store.setTotalMemberCount(data.count);
+        useRoomStore.getState().setTotalMemberCount(data.count);
       }
     };
 
@@ -354,77 +396,97 @@ export const KaraokeRoomPage: React.FC = () => {
     };
   }, [socket, roomId, token]);
 
-  // Hand raise actions
-  const handleRaiseHand = () => {
+  // Hand raise actions (all memoized with useCallback so React.memo children never re-render needlessly)
+  const handleRaiseHand = useCallback(() => {
     if (!roomId || !socket) return;
     socket.emit('hand:raise', { roomId, room_id: roomId });
-  };
+  }, [roomId, socket]);
 
-  const handleCancelHand = () => {
+  const handleCancelHand = useCallback(() => {
     if (!roomId || !socket) return;
-    const req = store.handQueue.find((h) => h.user_id === user?.id && h.status === 'pending');
+    const uid = useAuthStore.getState().user?.id;
+    const req = useRoomStore.getState().handQueue.find((h) => h.user_id === uid && h.status === 'pending');
     if (req) {
       socket.emit('hand:cancel', { roomId, room_id: roomId, requestId: req.id, request_id: req.id });
     }
-  };
+  }, [roomId, socket]);
 
-  const handleApproveHand = (requestId: string) => {
-    if (!roomId || !socket) return;
-    socket.emit('hand:approve', { roomId, room_id: roomId, requestId, request_id: requestId });
-  };
+  const handleApproveHand = useCallback(
+    (requestId: string) => {
+      if (!roomId || !socket) return;
+      socket.emit('hand:approve', { roomId, room_id: roomId, requestId, request_id: requestId });
+    },
+    [roomId, socket]
+  );
 
-  const handleRejectHand = (requestId: string) => {
-    if (!roomId || !socket) return;
-    socket.emit('hand:reject', { roomId, room_id: roomId, requestId, request_id: requestId });
-  };
+  const handleRejectHand = useCallback(
+    (requestId: string) => {
+      if (!roomId || !socket) return;
+      socket.emit('hand:reject', { roomId, room_id: roomId, requestId, request_id: requestId });
+    },
+    [roomId, socket]
+  );
 
-  const handleAcceptStageInvite = async () => {
-    store.setStageInvite(null);
+  const handleAcceptStageInvite = useCallback(async () => {
+    useRoomStore.getState().setStageInvite(null);
+    setMuted(false);
     if (socket && roomId) {
       socket.emit('stage:accept', { roomId, room_id: roomId });
     }
-    await captureRaw(selectedDeviceId);
-  };
+    await captureRaw(useAudioStore.getState().selectedDeviceId);
+  }, [roomId, socket, captureRaw, setMuted]);
 
-  const handleDeclineStageInvite = () => {
-    store.setStageInvite(null);
+  const handleDeclineStageInvite = useCallback(() => {
+    useRoomStore.getState().setStageInvite(null);
     if (!roomId || !socket) return;
     socket.emit('stage:decline', { roomId, room_id: roomId });
-  };
+  }, [roomId, socket]);
 
-  const handleToggleMic = () => {
-    const newMuted = !isMuted;
-    setMuted(newMuted);
-    if (!newMuted) {
-      if (!useAudioStore.getState().stream) {
-        captureRaw(selectedDeviceId);
+  const handleToggleMic = useCallback(async () => {
+    const audioState = useAudioStore.getState();
+    const uid = useAuthStore.getState().user?.id;
+    // If stream hasn't been captured yet, first click ALWAYS captures and unmutes immediately!
+    if (!audioState.stream) {
+      setMuted(false);
+      await captureRaw(audioState.selectedDeviceId);
+      if (roomId && socket && uid) {
+        socket.emit('audio:unmute', {
+          roomId,
+          room_id: roomId,
+          targetUserId: uid,
+        });
       }
+      return;
     }
-    if (roomId && socket && user) {
+
+    const newMuted = !audioState.isMuted;
+    setMuted(newMuted);
+    if (roomId && socket && uid) {
       socket.emit(newMuted ? 'audio:mute' : 'audio:unmute', {
         roomId,
         room_id: roomId,
-        targetUserId: user.id,
+        targetUserId: uid,
       });
     }
-  };
+  }, [roomId, socket, captureRaw, setMuted]);
 
-  const handleLeaveStage = () => {
-    if (!roomId || !socket || !user) return;
+  const handleLeaveStage = useCallback(() => {
+    const uid = useAuthStore.getState().user?.id;
+    if (!roomId || !socket || !uid) return;
     stopCapture();
-    socket.emit('stage:remove_self', { roomId, room_id: roomId, targetUserId: user.id });
-  };
+    socket.emit('stage:remove_self', { roomId, room_id: roomId, targetUserId: uid });
+  }, [roomId, socket, stopCapture]);
 
-  const handleLeaveRoom = () => {
+  const handleLeaveRoom = useCallback(() => {
     stopCapture();
     if (roomId && socket) {
       socket.emit('room:leave', { roomId });
     }
-    store.clearRoom();
+    useRoomStore.getState().clearRoom();
     navigate('/');
-  };
+  }, [roomId, socket, stopCapture, navigate]);
 
-  const handleConfirmCloseRoom = async () => {
+  const handleConfirmCloseRoom = useCallback(async () => {
     if (!roomId) return;
     try {
       if (socket) {
@@ -432,117 +494,161 @@ export const KaraokeRoomPage: React.FC = () => {
       }
       await closeRoomApi(roomId).catch(() => {});
       stopCapture();
-      store.clearRoom();
+      useRoomStore.getState().clearRoom();
       setShowCloseModal(false);
       navigate('/');
     } catch (err: any) {
       console.error('Close room error:', err);
     }
-  };
+  }, [roomId, socket, stopCapture, navigate]);
 
-  const handleHostMute = (targetUserId: string, mute: boolean) => {
-    if (!roomId || !socket) return;
-    socket.emit(mute ? 'audio:mute' : 'audio:unmute', {
-      roomId,
-      targetUserId,
-    });
-  };
+  const handleHostMute = useCallback(
+    (targetUserId: string, mute: boolean) => {
+      if (!roomId || !socket) return;
+      socket.emit(mute ? 'audio:mute' : 'audio:unmute', {
+        roomId,
+        targetUserId,
+      });
+    },
+    [roomId, socket]
+  );
 
-  const handleHostGain = (targetUserId: string, gain: number) => {
-    if (!roomId || !socket) return;
-    socket.emit('audio:gain_change', {
-      roomId,
-      targetUserId,
-      gain,
-    });
-  };
+  const handleHostGain = useCallback(
+    (targetUserId: string, gain: number) => {
+      if (!roomId || !socket) return;
+      socket.emit('audio:gain_change', {
+        roomId,
+        targetUserId,
+        gain,
+      });
+    },
+    [roomId, socket]
+  );
 
-  const handleHostRemoveSpeaker = (targetUserId: string) => {
-    if (!roomId || !socket) return;
-    socket.emit('stage:remove_speaker', { roomId, targetUserId });
-  };
+  const handleHostRemoveSpeaker = useCallback(
+    (targetUserId: string) => {
+      if (!roomId || !socket) return;
+      socket.emit('stage:remove_speaker', { roomId, targetUserId });
+    },
+    [roomId, socket]
+  );
 
-  const handleHostKick = (targetUserId: string) => {
-    if (!roomId || !socket) return;
-    if (confirm('Bạn có chắc chắn muốn kick người này khỏi phòng?')) {
-      socket.emit('room:kick', { roomId, targetUserId });
-    }
-  };
+  const handleHostKick = useCallback(
+    (targetUserId: string) => {
+      if (!roomId || !socket) return;
+      if (confirm('Bạn có chắc chắn muốn kick người này khỏi phòng?')) {
+        socket.emit('room:kick', { roomId, targetUserId });
+      }
+    },
+    [roomId, socket]
+  );
 
-  const handleHostBan = (targetUserId: string) => {
-    if (!roomId || !socket) return;
-    if (confirm('CẢNH BÁO: Bạn có chắc chắn muốn cấm (BAN) người này vào phòng?')) {
-      socket.emit('room:ban', { roomId, targetUserId });
-    }
-  };
+  const handleHostBan = useCallback(
+    (targetUserId: string) => {
+      if (!roomId || !socket) return;
+      if (confirm('CẢNH BÁO: Bạn có chắc chắn muốn cấm (BAN) người này vào phòng?')) {
+        socket.emit('room:ban', { roomId, targetUserId });
+      }
+    },
+    [roomId, socket]
+  );
 
-  const handleHostInviteToStage = (targetUserId: string) => {
-    if (!roomId || !socket) return;
-    socket.emit('stage:invite_member', { roomId, targetUserId });
-  };
+  const handleHostInviteToStage = useCallback(
+    (targetUserId: string) => {
+      if (!roomId || !socket) return;
+      socket.emit('stage:invite_member', { roomId, targetUserId });
+    },
+    [roomId, socket]
+  );
 
-  const handleSendMessage = (text: string, type: 'text' | 'sticker' = 'text') => {
-    if (!roomId || !socket) return;
-    socket.emit('room:chat_message', { roomId, text, message: text, type });
-  };
+  const handleSendMessage = useCallback(
+    (text: string, type: 'text' | 'sticker' = 'text') => {
+      if (!roomId || !socket) return;
+      socket.emit('room:chat_message', { roomId, text, message: text, type });
+    },
+    [roomId, socket]
+  );
 
-  const handleAddSong = (videoId: string, title?: string) => {
-    if (!roomId || !socket) return;
-    socket.emit('room:song_add', {
-      roomId,
-      videoId,
-      title: title || 'Karaoke Beat',
-      thumbnail: `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`,
-      channelName: 'YouTube',
-    });
-  };
+  const handleAddSong = useCallback(
+    (videoId: string, title?: string) => {
+      if (!roomId || !socket) return;
+      socket.emit('room:song_add', {
+        roomId,
+        videoId,
+        title: title || 'Karaoke Beat',
+        thumbnail: `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`,
+        channelName: 'YouTube',
+      });
+    },
+    [roomId, socket]
+  );
 
-  const handlePlaySongNow = (songId: string) => {
-    const song = store.songQueue.find((s) => s.id === songId);
-    if (!song || !socket || !roomId) return;
-    socket.emit('youtube:load', { roomId, videoId: song.video_id, title: song.title });
-    socket.emit('youtube:play_at', { roomId, position: 0 });
-    socket.emit('room:song_remove', { roomId, songId });
-  };
+  const handlePlaySongNow = useCallback(
+    (songId: string) => {
+      const song = useRoomStore.getState().songQueue.find((s) => s.id === songId);
+      if (!song || !socket || !roomId) return;
+      socket.emit('youtube:load', { roomId, videoId: song.video_id, title: song.title });
+      socket.emit('youtube:play_at', { roomId, position: 0 });
+      socket.emit('room:song_remove', { roomId, songId });
+    },
+    [roomId, socket]
+  );
 
-  const handleRemoveSong = (songId: string) => {
-    if (!roomId || !socket) return;
-    socket.emit('room:song_remove', { roomId, songId });
-  };
+  const handleRemoveSong = useCallback(
+    (songId: string) => {
+      if (!roomId || !socket) return;
+      socket.emit('room:song_remove', { roomId, songId });
+    },
+    [roomId, socket]
+  );
 
-  const handleSearchPlayNow = (videoId: string, title?: string) => {
-    if (!roomId || !socket) return;
-    const songTitle = title || 'Karaoke Beat';
-    socket.emit('youtube:load', { roomId, videoId, title: songTitle });
-    socket.emit('youtube:play_at', { roomId, position: 0 });
-  };
+  const handleSearchPlayNow = useCallback(
+    (videoId: string, title?: string) => {
+      if (!roomId || !socket) return;
+      const songTitle = title || 'Karaoke Beat';
+      socket.emit('youtube:load', { roomId, videoId, title: songTitle });
+      socket.emit('youtube:play_at', { roomId, position: 0 });
+    },
+    [roomId, socket]
+  );
 
-  const handleSearchAddToQueue = (videoId: string, title: string, thumbnail: string) => {
-    if (!roomId || !socket) return;
-    socket.emit('room:song_add', {
-      roomId,
-      videoId,
-      title: title || 'Karaoke Beat',
-      thumbnail: thumbnail || `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`,
-      channelName: 'YouTube',
-    });
-  };
+  const handleSearchAddToQueue = useCallback(
+    (videoId: string, title: string, thumbnail: string) => {
+      if (!roomId || !socket) return;
+      socket.emit('room:song_add', {
+        roomId,
+        videoId,
+        title: title || 'Karaoke Beat',
+        thumbnail: thumbnail || `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`,
+        channelName: 'YouTube',
+      });
+    },
+    [roomId, socket]
+  );
 
-  const handlePlayNextSong = () => {
-    const nextSong = store.songQueue.find((s) => s.status === 'queued');
+  const handlePlayNextSong = useCallback(() => {
+    const nextSong = useRoomStore.getState().songQueue.find((s) => s.status === 'queued');
     if (nextSong) {
       handlePlaySongNow(nextSong.id);
     }
-  };
+  }, [handlePlaySongNow]);
 
-  const handleCopyLink = () => {
+  const handleCopyLink = useCallback(() => {
     navigator.clipboard.writeText(window.location.href);
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
-  };
+  }, []);
 
-  const myMember = store.members.find((m) => m.user_id === user?.id);
-  const isHost = myMember?.role === 'OWNER' || myMember?.role === 'MODERATOR';
+  const handleOpenSearch = useCallback(() => setShowSearchModal(true), []);
+  const handleOpenAudioSettings = useCallback(() => setShowAudioSettings(true), []);
+  const handleCloseSidebar = useCallback(() => setIsSidebarOpen(false), []);
+  const handleToggleSidebar = useCallback(() => setIsSidebarOpen((prev) => !prev), []);
+  const handleToggleMobileViewMode = useCallback(
+    () => setMobileViewMode((m) => (m === 'compact' ? 'expanded' : 'compact')),
+    []
+  );
+
+  const isHost = myRole === 'OWNER' || myRole === 'MODERATOR';
 
   if (!user) {
     return <NicknameModal isOpen={true} onClose={() => {}} required={true} />;
@@ -579,7 +685,7 @@ export const KaraokeRoomPage: React.FC = () => {
           <div className="min-w-0">
             <div className="flex items-center space-x-1.5 sm:space-x-2">
               <h1 className="text-xs md:text-sm font-extrabold text-white truncate max-w-[130px] sm:max-w-xs">
-                {store.room?.name || 'Phòng Karaoke'}
+                {roomName || 'Phòng Karaoke'}
               </h1>
               <button
                 onClick={handleCopyLink}
@@ -587,12 +693,12 @@ export const KaraokeRoomPage: React.FC = () => {
                 title="Sao chép link mời phòng"
               >
                 {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
-                <span>#{store.room?.code}</span>
+                <span>#{roomCode}</span>
               </button>
 
               <div className="hidden sm:flex items-center space-x-1 px-2 py-0.5 rounded-lg bg-green-500/10 border border-green-500/20 text-green-400 text-[10px] font-bold" title="Số lượng người tham gia trong phòng">
                 <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                <span>{(store.totalMemberCount || store.members.length).toLocaleString()} người</span>
+                <span>{(totalMemberCount || 1).toLocaleString()} người</span>
               </div>
           </div>
         </div>
@@ -665,7 +771,7 @@ export const KaraokeRoomPage: React.FC = () => {
               isHost={isHost}
               onPlayNext={handlePlayNextSong}
               onLoadSong={handleAddSong}
-              onOpenSearch={isHost ? () => setShowSearchModal(true) : undefined}
+              onOpenSearch={isHost ? handleOpenSearch : undefined}
               onSelectPlayNow={handleSearchPlayNow}
             />
           </div>
@@ -675,12 +781,12 @@ export const KaraokeRoomPage: React.FC = () => {
             <StagePodium
               roomId={roomId!}
               isHost={isHost}
-              onMuteSpeaker={(uid, mute) => handleHostMute(uid, mute)}
-              onGainChange={(uid, gain) => handleHostGain(uid, gain)}
-              onRemoveSpeaker={(uid) => handleHostRemoveSpeaker(uid)}
+              onMuteSpeaker={handleHostMute}
+              onGainChange={handleHostGain}
+              onRemoveSpeaker={handleHostRemoveSpeaker}
               getTriggerProps={userContextMenu.getTriggerProps}
               onOpenContextMenu={userContextMenu.openMenu}
-              onOpenAudioSettings={() => setShowAudioSettings(true)}
+              onOpenAudioSettings={handleOpenAudioSettings}
             />
           </div>
         </section>
@@ -719,17 +825,15 @@ export const KaraokeRoomPage: React.FC = () => {
                 onRemoveSong={handleRemoveSong}
                 onApproveHand={handleApproveHand}
                 onRejectHand={handleRejectHand}
-                onMuteSpeaker={(uid, mute) => handleHostMute(uid, mute)}
-                onGainChange={(uid, gain) => handleHostGain(uid, gain)}
-                onRemoveSpeaker={(uid) => handleHostRemoveSpeaker(uid)}
+                onMuteSpeaker={handleHostMute}
+                onGainChange={handleHostGain}
+                onRemoveSpeaker={handleHostRemoveSpeaker}
                 onKickMember={handleHostKick}
                 onBanMember={handleHostBan}
-                onOpenSearch={isHost ? () => setShowSearchModal(true) : undefined}
-                onClose={() => setIsSidebarOpen(false)}
+                onOpenSearch={isHost ? handleOpenSearch : undefined}
+                onClose={handleCloseSidebar}
                 mobileViewMode={mobileViewMode}
-                onToggleMobileViewMode={() =>
-                  setMobileViewMode((m) => (m === 'compact' ? 'expanded' : 'compact'))
-                }
+                onToggleMobileViewMode={handleToggleMobileViewMode}
                 getTriggerProps={userContextMenu.getTriggerProps}
                 onOpenContextMenu={userContextMenu.openMenu}
               />
@@ -790,9 +894,9 @@ export const KaraokeRoomPage: React.FC = () => {
               <span className="sm:hidden">Chat</span>
 
               {/* Hand queue or unread badge */}
-              {store.handQueue.filter((h) => h.status === 'pending').length > 0 && (
+              {pendingHandCount > 0 && (
                 <span className="px-1.5 py-0.2 rounded-full bg-danger text-white text-[9px] font-black animate-pulse shadow-md">
-                  {store.handQueue.filter((h) => h.status === 'pending').length}
+                  {pendingHandCount}
                 </span>
               )}
             </button>
@@ -805,7 +909,7 @@ export const KaraokeRoomPage: React.FC = () => {
         roomId={roomId!}
         isHost={isHost}
         isChatOpen={isSidebarOpen}
-        onToggleChat={() => setIsSidebarOpen(!isSidebarOpen)}
+        onToggleChat={handleToggleSidebar}
         onRaiseHand={handleRaiseHand}
         onCancelHand={handleCancelHand}
         onAcceptStageInvite={handleAcceptStageInvite}
@@ -813,7 +917,7 @@ export const KaraokeRoomPage: React.FC = () => {
         onToggleMic={handleToggleMic}
         onLeaveStage={handleLeaveStage}
         onLeaveRoom={handleLeaveRoom}
-        onOpenAudioSettings={() => setShowAudioSettings(true)}
+        onOpenAudioSettings={handleOpenAudioSettings}
       />
 
       {/* Audio Settings Modal */}
@@ -839,9 +943,9 @@ export const KaraokeRoomPage: React.FC = () => {
         isHost={isHost}
         onClose={userContextMenu.closeMenu}
         onOpenProfile={() => setShowProfileModal(true)}
-        onMuteSpeaker={(uid, mute) => handleHostMute(uid, mute)}
-        onGainChange={(uid, gain) => handleHostGain(uid, gain)}
-        onRemoveSpeaker={(uid) => handleHostRemoveSpeaker(uid)}
+        onMuteSpeaker={handleHostMute}
+        onGainChange={handleHostGain}
+        onRemoveSpeaker={handleHostRemoveSpeaker}
         onInviteToStage={handleHostInviteToStage}
         onKickMember={handleHostKick}
         onBanMember={handleHostBan}

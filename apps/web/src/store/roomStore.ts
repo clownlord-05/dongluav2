@@ -75,7 +75,26 @@ export const useRoomStore = create<RoomStore>((set) => ({
     })),
   addMember: (member) =>
     set((s) => {
-      if (s.members.find((m) => m.user_id === member.user_id)) return s;
+      const idx = s.members.findIndex((m) => m.user_id === member.user_id);
+      if (idx !== -1) {
+        const existing = s.members[idx];
+        if (
+          existing.role === member.role &&
+          existing.muted === member.muted &&
+          existing.display_name === member.display_name &&
+          existing.avatar_seed === member.avatar_seed
+        ) {
+          return s;
+        }
+        const updated = [...s.members];
+        updated[idx] = { ...existing, ...member };
+        return { members: updated };
+      }
+      // Cap stored AUDIENCE list at 150 to keep React/DOM ultra-fast for 200-5,000 viewers
+      // while always keeping OWNER, MODERATOR, and SPEAKER members
+      if (member.role === 'AUDIENCE' && s.members.length >= 150) {
+        return s;
+      }
       return { members: [...s.members, member] };
     }),
   removeMember: (userId) =>
@@ -104,7 +123,7 @@ export const useRoomStore = create<RoomStore>((set) => ({
 
   addChatMessage: (msg) =>
     set((s) => ({
-      chatMessages: [...s.chatMessages.slice(-200), msg],
+      chatMessages: [...s.chatMessages.slice(-79), msg],
     })),
 
   setPlayback: (playback) => set({ playback }),

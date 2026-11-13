@@ -113,10 +113,10 @@ export function useAudio() {
   const micGainNodeRef = useRef<GainNode | null>(null);
   const gainValue = useAudioStore((s) => s.gain);
 
-  // Sync live mic gain node whenever user adjusts gain slider
+  // Sync live mic gain node whenever user adjusts gain slider (with 1.35x studio vocal preamp boost)
   useEffect(() => {
     if (micGainNodeRef.current) {
-      micGainNodeRef.current.gain.value = gainValue;
+      micGainNodeRef.current.gain.value = gainValue * 1.35;
     }
   }, [gainValue]);
 
@@ -156,17 +156,32 @@ export function useAudio() {
         if (ctx.state === 'suspended') {
           await ctx.resume().catch(() => {});
         }
+        ctx.onstatechange = () => {
+          if (ctx.state === 'suspended') {
+            ctx.resume().catch(() => {});
+          }
+        };
         audioCtxRef.current = ctx;
 
         const source = ctx.createMediaStreamSource(rawStream);
+
+        // Hardware C++ DSP Vocal Preamp + Soft Limiter so mic catches every syllable cleanly without clipping
+        const compressor = ctx.createDynamicsCompressor();
+        compressor.threshold.value = -22;
+        compressor.knee.value = 12;
+        compressor.ratio.value = 3.0;
+        compressor.attack.value = 0.002;
+        compressor.release.value = 0.12;
+
         const gainNode = ctx.createGain();
-        gainNode.gain.value = useAudioStore.getState().gain ?? 1.0;
+        gainNode.gain.value = (useAudioStore.getState().gain ?? 1.0) * 1.35;
         micGainNodeRef.current = gainNode;
 
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 128;
 
-        source.connect(gainNode);
+        source.connect(compressor);
+        compressor.connect(gainNode);
         gainNode.connect(analyser);
         analyserRef.current = analyser;
 

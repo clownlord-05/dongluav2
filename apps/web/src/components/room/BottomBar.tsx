@@ -51,6 +51,8 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   const handQueue = useRoomStore((s) => s.handQueue);
   const stageInvite = useRoomStore((s) => s.stageInvite);
   const isMuted = useAudioStore((s) => s.isMuted);
+  const hasStream = useAudioStore((s) => !!s.stream);
+  const isMicLive = !isMuted && hasStream;
 
   const myMember = members.find((m) => m.user_id === user?.id);
   const isSpeaker = myMember?.role === 'SPEAKER' || myMember?.role === 'OWNER';
@@ -107,14 +109,14 @@ export const BottomBar: React.FC<BottomBarProps> = ({
                 type="button"
                 onClick={onToggleMic}
                 className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition shadow-lg shrink-0 ${
-                  isMuted
+                  !isMicLive
                     ? 'bg-danger text-white shadow-danger/30'
                     : 'bg-green-500 hover:bg-green-600 text-white shadow-green-500/30'
                 }`}
-                title={isMuted ? 'Bấm để bật Micro' : 'Bấm để tắt Micro'}
+                title={!isMicLive ? 'Bấm để bật Micro' : 'Bấm để tắt Micro'}
               >
-                {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4 animate-pulse" />}
-                <span>{isMuted ? 'Tắt Mic' : 'Mic Đang Bật'}</span>
+                {!isMicLive ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4 animate-pulse" />}
+                <span>{!hasStream ? 'Bấm Bật Mic' : isMuted ? 'Tắt Mic' : 'Mic Đang Bật'}</span>
               </button>
 
               {!isHost && (

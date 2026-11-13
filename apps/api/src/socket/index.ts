@@ -27,6 +27,42 @@ export function initSocket(server: HttpServer): SocketIOServer {
   const chatTimestamps = new Map<string, number[]>();
   const lastLevelEmit = new Map<string, number>();
 
+  // In-memory O(1) role map per room: roomId -> Map<userId, role>
+  const roomRoles = new Map<string, Map<string, string>>();
+  const memberCountTimers = new Map<string, NodeJS.Timeout>();
+
+  function setFastRole(roomId: string, uid: string, role: string) {
+    let map = roomRoles.get(roomId);
+    if (!map) {
+      map = new Map<string, string>();
+      roomRoles.set(roomId, map);
+    }
+    map.set(uid, role);
+  }
+
+  function getFastRole(roomId: string, uid: string): string | undefined {
+    const cached = roomRoles.get(roomId)?.get(uid);
+    if (cached) return cached;
+    const member = getActiveMember(roomId, uid);
+    if (member) {
+      setFastRole(roomId, uid, member.role);
+      return member.role;
+    }
+    return undefined;
+  }
+
+  function emitMemberCountThrottled(roomId: string) {
+    if (memberCountTimers.has(roomId)) return;
+    const timer = setTimeout(() => {
+      memberCountTimers.delete(roomId);
+      if (!io) return;
+      const roomSockets = io.sockets.adapter.rooms.get(roomId);
+      const count = roomSockets ? roomSockets.size : getRoomMemberCount(roomId);
+      io.to(roomId).emit('room:member_count', { count: Math.max(1, count) });
+    }, 350);
+    memberCountTimers.set(roomId, timer);
+  }
+
   io = new SocketIOServer(server, {
     cors: {
       origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
@@ -100,7 +136,14 @@ export function initSocket(server: HttpServer): SocketIOServer {
         }
 
         const isOwner = room.owner_id === userId;
-        const member = joinRoom(roomId, userId, isOwner ? 'OWNER' : 'AUDIENCE');
+        const existingMember = getActiveMember(roomId, userId);
+        const initialRole = isOwner
+          ? 'OWNER'
+          : existingMember?.role === 'SPEAKER' || existingMember?.role === 'MODERATOR'
+          ? existingMember.role
+          : 'AUDIENCE';
+        const member = joinRoom(roomId, userId, initialRole);
+        setFastRole(roomId, userId, member.role);
 
         socket.join(roomId);
         socket.join(`user:${userId}`);
@@ -116,12 +159,13 @@ export function initSocket(server: HttpServer): SocketIOServer {
           display_name: user.display_name,
           avatar_seed: user.avatar_seed,
           role: member.role,
+          muted: member.muted === 1,
+          gain: member.gain ?? 1.0,
           connection_state: 'connected',
         });
 
-        // Broadcast updated member count to entire room
-        const totalCount = getRoomMemberCount(roomId);
-        io!.to(roomId).emit('room:member_count', { count: totalCount });
+        // Throttled member count broadcast to entire room
+        emitMemberCountThrottled(roomId);
 
         // Send current room playback state to the newly joined user
         const pb = getPlayback(roomId);
@@ -144,12 +188,12 @@ export function initSocket(server: HttpServer): SocketIOServer {
 
     socket.on('room:leave', ({ roomId }: { roomId: string }) => {
       leaveRoom(roomId, userId);
+      roomRoles.get(roomId)?.delete(userId);
       socket.leave(roomId);
       socket.leave(`speakers:${roomId}`);
       (socket as any).currentRoom = null;
       io!.to(roomId).emit('room:member_left', { user_id: userId, reason: 'left' });
-      const totalCount = getRoomMemberCount(roomId);
-      io!.to(roomId).emit('room:member_count', { count: totalCount });
+      emitMemberCountThrottled(roomId);
     });
 
     // --- 2. CHAT MESSAGE ---
@@ -171,7 +215,8 @@ export function initSocket(server: HttpServer): SocketIOServer {
       chatTimestamps.set(userId, recentChats);
 
       const cleanText = text.trim().slice(0, 500);
-      const member = getActiveMember(roomId, userId);
+      const role = getFastRole(roomId, userId) || 'AUDIENCE';
+      const nowIso = new Date().toISOString();
 
       const msg = {
         id: uuidv4(),
@@ -186,9 +231,9 @@ export function initSocket(server: HttpServer): SocketIOServer {
         text: cleanText,
         message: cleanText,
         type,
-        role: member?.role || 'AUDIENCE',
-        createdAt: new Date().toISOString(),
-        timestamp: new Date().toISOString(),
+        role,
+        createdAt: nowIso,
+        timestamp: nowIso,
       };
 
       io!.to(roomId).emit('room:chat_message', msg);
@@ -201,8 +246,8 @@ export function initSocket(server: HttpServer): SocketIOServer {
       const title = payload?.title || 'Karaoke Beat';
       if (!roomId || !video_id) return;
 
-      const member = getActiveMember(roomId, userId);
-      if (!member || !['OWNER', 'MODERATOR'].includes(member.role)) return;
+      const role = getFastRole(roomId, userId);
+      if (!role || !['OWNER', 'MODERATOR'].includes(role)) return;
 
       loadVideo(roomId, video_id, userId, title);
       io!.to(roomId).emit('youtube:load', {
@@ -217,8 +262,8 @@ export function initSocket(server: HttpServer): SocketIOServer {
       const position = typeof payload?.position === 'number' ? payload.position : (payload?.position_seconds || 0);
       if (!roomId) return;
 
-      const member = getActiveMember(roomId, userId);
-      if (!member || !['OWNER', 'MODERATOR'].includes(member.role)) return;
+      const role = getFastRole(roomId, userId);
+      if (!role || !['OWNER', 'MODERATOR'].includes(role)) return;
 
       playAt(roomId, position, userId);
       io!.to(roomId).emit('youtube:play_at', {
@@ -233,8 +278,8 @@ export function initSocket(server: HttpServer): SocketIOServer {
       const position = typeof payload?.position === 'number' ? payload.position : (payload?.position_seconds || 0);
       if (!roomId) return;
 
-      const member = getActiveMember(roomId, userId);
-      if (!member || !['OWNER', 'MODERATOR'].includes(member.role)) return;
+      const role = getFastRole(roomId, userId);
+      if (!role || !['OWNER', 'MODERATOR'].includes(role)) return;
 
       pauseAt(roomId, position, userId);
       io!.to(roomId).emit('youtube:pause', {
@@ -249,8 +294,8 @@ export function initSocket(server: HttpServer): SocketIOServer {
       const position = typeof payload?.position === 'number' ? payload.position : (payload?.position_seconds || 0);
       if (!roomId) return;
 
-      const member = getActiveMember(roomId, userId);
-      if (!member || !['OWNER', 'MODERATOR'].includes(member.role)) return;
+      const role = getFastRole(roomId, userId);
+      if (!role || !['OWNER', 'MODERATOR'].includes(role)) return;
 
       seekTo(roomId, position, userId);
       io!.to(roomId).emit('youtube:seek', {
@@ -378,13 +423,19 @@ export function initSocket(server: HttpServer): SocketIOServer {
         const roomId = data?.roomId || data?.room_id;
         const requestId = data?.requestId || data?.request_id;
         if (!roomId || !requestId) return;
-        const member = getActiveMember(roomId, userId);
-        if (!member || !['OWNER', 'MODERATOR'].includes(member.role)) return;
+        const role = getFastRole(roomId, userId);
+        if (!role || !['OWNER', 'MODERATOR'].includes(role)) return;
 
         const req = reviewHandRequest(requestId, userId, true);
         if (!req) return;
 
         setMemberRole(roomId, req.user_id, 'SPEAKER');
+        setMemberMuted(roomId, req.user_id, false);
+        setFastRole(roomId, req.user_id, 'SPEAKER');
+
+        // Also add target user's socket to speakers room
+        io!.in(`user:${req.user_id}`).socketsJoin(`speakers:${roomId}`);
+
         io!.to(roomId).emit('hand:request_updated', {
           id: req.id,
           request_id: req.id,
@@ -395,9 +446,10 @@ export function initSocket(server: HttpServer): SocketIOServer {
         io!.to(roomId).emit('stage:participant_added', {
           user_id: req.user_id,
           role: 'SPEAKER',
+          muted: false,
         });
-        // Direct stage invite so mobile users can tap to grant microphone permission
-        io!.to(roomId).emit('stage:invite', {
+        // Direct stage invite only to the target user so mobile users can tap to grant microphone permission
+        io!.to(`user:${req.user_id}`).emit('stage:invite', {
           invite_id: req.id,
           user_id: req.user_id,
           invited_by_name: user.display_name || 'Chủ phòng',
@@ -412,8 +464,8 @@ export function initSocket(server: HttpServer): SocketIOServer {
         const roomId = data?.roomId || data?.room_id;
         const requestId = data?.requestId || data?.request_id;
         if (!roomId || !requestId) return;
-        const member = getActiveMember(roomId, userId);
-        if (!member || !['OWNER', 'MODERATOR'].includes(member.role)) return;
+        const role = getFastRole(roomId, userId);
+        if (!role || !['OWNER', 'MODERATOR'].includes(role)) return;
 
         const req = reviewHandRequest(requestId, userId, false);
         if (!req) return;
@@ -435,10 +487,13 @@ export function initSocket(server: HttpServer): SocketIOServer {
         const roomId = data?.roomId || data?.room_id;
         if (!roomId) return;
         setMemberRole(roomId, userId, 'SPEAKER');
+        setMemberMuted(roomId, userId, false);
+        setFastRole(roomId, userId, 'SPEAKER');
         socket.join(`speakers:${roomId}`);
         io!.to(roomId).emit('stage:participant_added', {
           user_id: userId,
           role: 'SPEAKER',
+          muted: false,
         });
       } catch (e: any) {
         console.warn('stage:accept error:', e);
@@ -454,6 +509,7 @@ export function initSocket(server: HttpServer): SocketIOServer {
         const roomId = data?.roomId || data?.room_id;
         if (!roomId) return;
         setMemberRole(roomId, userId, 'AUDIENCE');
+        setFastRole(roomId, userId, 'AUDIENCE');
         socket.leave(`speakers:${roomId}`);
         io!.to(roomId).emit('stage:participant_removed', {
           user_id: userId,
@@ -469,10 +525,10 @@ export function initSocket(server: HttpServer): SocketIOServer {
         const roomId = data?.roomId || data?.room_id;
         const targetUserId = data?.targetUserId || data?.target_user_id || data?.userId || data?.user_id;
         if (!roomId || !targetUserId) return;
-        const member = getActiveMember(roomId, userId);
-        if (!member || !['OWNER', 'MODERATOR'].includes(member.role)) return;
+        const role = getFastRole(roomId, userId);
+        if (!role || !['OWNER', 'MODERATOR'].includes(role)) return;
 
-        io!.to(roomId).emit('stage:invite', {
+        io!.to(`user:${targetUserId}`).emit('stage:invite', {
           invite_id: String(Date.now()),
           user_id: targetUserId,
           invited_by_name: user.display_name,
@@ -487,11 +543,13 @@ export function initSocket(server: HttpServer): SocketIOServer {
         const roomId = data?.roomId || data?.room_id;
         const targetUserId = data?.targetUserId || data?.target_user_id || data?.userId || data?.user_id;
         if (!roomId || !targetUserId) return;
-        const member = getActiveMember(roomId, userId);
+        const role = getFastRole(roomId, userId);
         const isSelf = targetUserId === userId;
-        if (!isSelf && (!member || !['OWNER', 'MODERATOR'].includes(member.role))) return;
+        if (!isSelf && (!role || !['OWNER', 'MODERATOR'].includes(role))) return;
 
         setMemberRole(roomId, targetUserId, 'AUDIENCE');
+        setFastRole(roomId, targetUserId, 'AUDIENCE');
+        io!.in(`user:${targetUserId}`).socketsLeave(`speakers:${roomId}`);
         io!.to(roomId).emit('stage:participant_removed', {
           user_id: targetUserId,
           new_role: 'AUDIENCE',
@@ -538,26 +596,39 @@ export function initSocket(server: HttpServer): SocketIOServer {
       }
     });
 
-    // --- 4. AUDIO CONTROLS (Host Gain & Mute) ---
-    socket.on('audio:mute', ({ roomId, targetUserId }: { roomId: string; targetUserId: string }) => {
-      const member = getActiveMember(roomId, userId);
-      if (!member || !['OWNER', 'MODERATOR'].includes(member.role)) return;
+    // --- 4. AUDIO CONTROLS (Host Gain & Mute + Self Mute/Unmute for Speakers) ---
+    socket.on('audio:mute', (data: any) => {
+      const roomId = data?.roomId || data?.room_id;
+      const targetUserId = data?.targetUserId || data?.target_user_id || userId;
+      if (!roomId) return;
+      const role = getFastRole(roomId, userId);
+      const isSelf = targetUserId === userId;
+      if (!isSelf && (!role || !['OWNER', 'MODERATOR'].includes(role))) return;
 
       setMemberMuted(roomId, targetUserId, true);
       io!.to(roomId).emit('audio:mute_changed', { user_id: targetUserId, muted: true });
     });
 
-    socket.on('audio:unmute', ({ roomId, targetUserId }: { roomId: string; targetUserId: string }) => {
-      const member = getActiveMember(roomId, userId);
-      if (!member || !['OWNER', 'MODERATOR'].includes(member.role)) return;
+    socket.on('audio:unmute', (data: any) => {
+      const roomId = data?.roomId || data?.room_id;
+      const targetUserId = data?.targetUserId || data?.target_user_id || userId;
+      if (!roomId) return;
+      const role = getFastRole(roomId, userId);
+      const isSelf = targetUserId === userId;
+      if (!isSelf && (!role || !['OWNER', 'MODERATOR'].includes(role))) return;
 
       setMemberMuted(roomId, targetUserId, false);
       io!.to(roomId).emit('audio:mute_changed', { user_id: targetUserId, muted: false });
     });
 
-    socket.on('audio:gain_change', ({ roomId, targetUserId, gain }: { roomId: string; targetUserId: string; gain: number }) => {
-      const member = getActiveMember(roomId, userId);
-      if (!member || !['OWNER', 'MODERATOR'].includes(member.role)) return;
+    socket.on('audio:gain_change', (data: any) => {
+      const roomId = data?.roomId || data?.room_id;
+      const targetUserId = data?.targetUserId || data?.target_user_id || userId;
+      const gain = typeof data?.gain === 'number' ? data.gain : 1.0;
+      if (!roomId) return;
+      const role = getFastRole(roomId, userId);
+      const isSelf = targetUserId === userId;
+      if (!isSelf && (!role || !['OWNER', 'MODERATOR'].includes(role))) return;
 
       setMemberGain(roomId, targetUserId, gain);
       io!.to(roomId).emit('audio:gain_changed', { user_id: targetUserId, gain });
@@ -585,31 +656,34 @@ export function initSocket(server: HttpServer): SocketIOServer {
       }
     });
 
-    // Forward stream request to room members so anyone with an active mic creates a peer offer
+    // Forward stream request ONLY to active speakers so 200 audience members don't get flooded
     socket.on('signal:request', (data: any) => {
       const roomId = data?.roomId || data?.room_id;
       if (roomId) {
-        socket.to(roomId).emit('signal:request', { from: socket.id, fromUserId: userId });
+        socket.to(`speakers:${roomId}`).emit('signal:request', { from: socket.id, fromUserId: userId });
       }
     });
 
-    socket.on('signal:stop', ({ roomId }: { roomId: string }) => {
-      socket.to(roomId).emit('signal:stop', { fromUserId: userId });
+    socket.on('signal:stop', (data: any) => {
+      const roomId = data?.roomId || data?.room_id;
+      if (roomId) {
+        socket.to(roomId).emit('signal:stop', { fromUserId: userId });
+      }
     });
 
-    // Audio level meter broadcast (Throttled to max 8/sec to avoid socket flood on 5,000 clients)
+    // Audio level meter broadcast (Throttled to max 5/sec, volatile)
     socket.on('audio:level', ({ roomId, level }: { roomId: string; level: number }) => {
       const now = Date.now();
       const last = lastLevelEmit.get(userId) || 0;
-      if (now - last < 120) return;
+      if (now - last < 200) return;
       lastLevelEmit.set(userId, now);
-      socket.to(roomId).emit('audio:level', { user_id: userId, level });
+      socket.volatile.to(roomId).emit('audio:level', { user_id: userId, level });
     });
 
-    // High-performance binary audio stream relay for massive audience (up to 5,000 listeners)
+    // Ultra-low-latency volatile binary audio broadcast for 200+ audience members
     socket.on('audio:relay_chunk', ({ roomId, chunk }: { roomId: string; chunk: ArrayBuffer }) => {
       if (!roomId || !chunk) return;
-      socket.to(roomId).emit('audio:relay_chunk', {
+      socket.volatile.to(roomId).emit('audio:relay_chunk', {
         speakerId: userId,
         chunk,
       });
@@ -639,9 +713,9 @@ export function initSocket(server: HttpServer): SocketIOServer {
       const currentRoom = (socket as any).currentRoom;
       if (currentRoom) {
         leaveRoom(currentRoom, userId);
+        roomRoles.get(currentRoom)?.delete(userId);
         io!.to(currentRoom).emit('room:member_left', { user_id: userId, reason: 'disconnected' });
-        const totalCount = getRoomMemberCount(currentRoom);
-        io!.to(currentRoom).emit('room:member_count', { count: totalCount });
+        emitMemberCountThrottled(currentRoom);
       }
       chatTimestamps.delete(userId);
       lastLevelEmit.delete(userId);

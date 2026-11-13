@@ -79,6 +79,54 @@ function tuneOpusSDP(sdp: string): string {
   return newLines.join('\r\n');
 }
 
+const MAX_P2P_PEERS = 8;
+
+// Off-main-thread AudioWorklet code for 24kHz low-latency PCM broadcast to 200+ audience members
+const WORKLET_CODE = `
+class DongLuaMicProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.buffer = new Int16Array(720); // 30ms at 24kHz (1440 bytes/packet)
+    this.writeIndex = 0;
+    this.sumSq = 0;
+  }
+  process(inputs) {
+    const input = inputs[0];
+    if (!input || !input[0]) return true;
+    const ch = input[0];
+    const len = ch.length;
+    // Downsample 48kHz -> 24kHz (2:1 decimation with 2-sample average)
+    for (let i = 0; i < len; i += 2) {
+      const s = (ch[i] + (ch[i + 1] !== undefined ? ch[i + 1] : ch[i])) * 0.5;
+      const clamped = s < -1 ? -1 : s > 1 ? 1 : s;
+      this.sumSq += clamped * clamped;
+      this.buffer[this.writeIndex++] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
+      if (this.writeIndex >= 720) {
+        const rms = Math.sqrt(this.sumSq / 720);
+        // Built-in silence gate: only transmit when vocal/sound energy is above noise floor
+        if (rms > 0.0005) {
+          const out = new Int16Array(this.buffer);
+          this.port.postMessage(out.buffer, [out.buffer]);
+        }
+        this.writeIndex = 0;
+        this.sumSq = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('donglua-mic-processor', DongLuaMicProcessor);
+`;
+
+let workletBlobUrl: string | null = null;
+function getWorkletUrl(): string {
+  if (!workletBlobUrl) {
+    const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
+    workletBlobUrl = URL.createObjectURL(blob);
+  }
+  return workletBlobUrl;
+}
+
 interface RemoteAudioNode {
   audioElement: HTMLAudioElement;
   sourceNode?: MediaStreamAudioSourceNode;
@@ -95,8 +143,12 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
   const userMutes = useAudioStore((s) => s.userMutes);
 
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const connectedPeers = useRef<Set<string>>(new Set());
   const remoteNodes = useRef<Map<string, RemoteAudioNode>>(new Map());
+  const relayGainNodes = useRef<Map<string, GainNode>>(new Map());
+  const nextPlayTimeMap = useRef<Map<string, number>>(new Map());
   const audioContextRef = useRef<AudioContext | null>(null);
+  const workletLoadedRef = useRef<boolean>(false);
 
   // Initialize shared AudioContext for low-latency playback & volume processing
   const getAudioContext = useCallback(() => {
@@ -106,6 +158,7 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
         latencyHint: 'interactive',
         sampleRate: 48000,
       });
+      workletLoadedRef.current = false;
     }
     if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume().catch(() => {});
@@ -115,6 +168,9 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
 
   // Clean up a specific remote peer's connection and audio nodes
   const cleanupPeer = useCallback((userId: string) => {
+    connectedPeers.current.delete(userId);
+    nextPlayTimeMap.current.delete(userId);
+
     const pc = peerConnections.current.get(userId);
     if (pc) {
       pc.close();
@@ -133,6 +189,14 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
       }
       remoteNodes.current.delete(userId);
     }
+
+    const relayGain = relayGainNodes.current.get(userId);
+    if (relayGain) {
+      try {
+        relayGain.disconnect();
+      } catch (e) {}
+      relayGainNodes.current.delete(userId);
+    }
   }, []);
 
   // Clean up all peer connections
@@ -140,11 +204,27 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
     for (const userId of Array.from(peerConnections.current.keys())) {
       cleanupPeer(userId);
     }
+    for (const userId of Array.from(relayGainNodes.current.keys())) {
+      cleanupPeer(userId);
+    }
+    connectedPeers.current.clear();
+    nextPlayTimeMap.current.clear();
     if (audioContextRef.current) {
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
+      workletLoadedRef.current = false;
     }
   }, [cleanupPeer]);
+
+  // Compute combined gain for a remote speaker (User local volume * Host stage gain)
+  const computeSpeakerGain = useCallback((speakerId: string) => {
+    const { userVolumes: curVolumes, userMutes: curMutes } = useAudioStore.getState();
+    if (curMutes[speakerId]) return 0;
+    const localVol = (curVolumes[speakerId] ?? 100) / 100;
+    const member = useRoomStore.getState().members.find((m) => m.user_id === speakerId);
+    const hostGain = member?.gain ?? 1.0;
+    return localVol * hostGain;
+  }, []);
 
   // Attach and play remote audio with volume boost
   const handleRemoteStream = useCallback(
@@ -188,11 +268,7 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
           node.audioElement.srcObject = remoteStream;
         }
 
-        // Apply initial volume & mute
-        const { userVolumes: curVolumes, userMutes: curMutes } = useAudioStore.getState();
-        const vol = curVolumes[fromUserId] ?? 100;
-        const isUserMuted = curMutes[fromUserId] ?? false;
-        const gainValue = isUserMuted ? 0 : vol / 100;
+        const gainValue = computeSpeakerGain(fromUserId);
         if (node.gainNode) {
           node.gainNode.gain.value = gainValue;
         }
@@ -207,16 +283,13 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
         console.error('[WebRTC] Failed to handle remote stream:', err);
       }
     },
-    [getAudioContext]
+    [getAudioContext, computeSpeakerGain]
   );
 
-  // Update volume & mute for remote peers dynamically
+  // Update volume & mute for remote peers dynamically (both P2P and Relay nodes)
   useEffect(() => {
     remoteNodes.current.forEach((node, userId) => {
-      const vol = userVolumes[userId] ?? 100;
-      const isUserMuted = userMutes[userId] ?? false;
-      const gainValue = isUserMuted ? 0 : vol / 100;
-
+      const gainValue = computeSpeakerGain(userId);
       if (node.gainNode) {
         node.gainNode.gain.value = gainValue;
       }
@@ -224,7 +297,32 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
         node.audioElement.volume = Math.min(1.0, gainValue);
       }
     });
-  }, [userVolumes, userMutes]);
+    relayGainNodes.current.forEach((gainNode, userId) => {
+      gainNode.gain.value = computeSpeakerGain(userId);
+    });
+  }, [userVolumes, userMutes, members, computeSpeakerGain]);
+
+  // Bind connection state tracker so relay seamlessly covers until P2P is genuinely connected
+  const attachConnectionStateTracker = useCallback((peerId: string, pc: RTCPeerConnection) => {
+    const updateState = () => {
+      const state = pc.connectionState;
+      const ice = pc.iceConnectionState;
+      if (state === 'connected' || ice === 'connected' || ice === 'completed') {
+        connectedPeers.current.add(peerId);
+      } else if (
+        state === 'disconnected' ||
+        state === 'failed' ||
+        state === 'closed' ||
+        ice === 'disconnected' ||
+        ice === 'failed' ||
+        ice === 'closed'
+      ) {
+        connectedPeers.current.delete(peerId);
+      }
+    };
+    pc.onconnectionstatechange = updateState;
+    pc.oniceconnectionstatechange = updateState;
+  }, []);
 
   // Initiate a WebRTC connection offer to a target peer
   const createAndSendOffer = useCallback(
@@ -236,9 +334,11 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
         if (pc) {
           pc.close();
         }
+        connectedPeers.current.delete(targetUserId);
 
         pc = new RTCPeerConnection(RTC_CONFIG);
         peerConnections.current.set(targetUserId, pc);
+        attachConnectionStateTracker(targetUserId, pc);
 
         const curMuted = useAudioStore.getState().isMuted;
         // Add local raw audio tracks to peer connection
@@ -273,7 +373,7 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
         console.error(`[WebRTC] Failed to create offer to ${targetUserId}:`, err);
       }
     },
-    [socket, stream, currentUserId]
+    [socket, stream, currentUserId, attachConnectionStateTracker]
   );
 
   // Update track enabled state when local mic is muted/unmuted
@@ -305,11 +405,14 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
         if (pc) {
           pc.close();
         }
+        connectedPeers.current.delete(fromUserId);
 
         pc = new RTCPeerConnection(RTC_CONFIG);
         peerConnections.current.set(fromUserId, pc);
+        attachConnectionStateTracker(fromUserId, pc);
 
         pc.ontrack = (event) => {
+          connectedPeers.current.add(fromUserId);
           // Zero jitter buffer playout hint
           if (event.receiver) {
             if ('playoutDelayHint' in event.receiver) {
@@ -386,9 +489,15 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
       }
     };
 
-    // When another peer requests active streams, send them an offer if we have an active stream
+    // Cap direct P2P offers to MAX_P2P_PEERS (prioritizing stage speakers) so 200 audience members never overload the singer
     const handleRequest = ({ fromUserId }: { from: string; fromUserId?: string }) => {
-      if (fromUserId && fromUserId !== currentUserId && stream) {
+      if (!fromUserId || fromUserId === currentUserId || !stream) return;
+      const requester = useRoomStore.getState().members.find((m) => m.user_id === fromUserId);
+      const isStagePeer =
+        requester?.role === 'OWNER' ||
+        requester?.role === 'SPEAKER' ||
+        requester?.role === 'MODERATOR';
+      if (isStagePeer || peerConnections.current.size < MAX_P2P_PEERS) {
         createAndSendOffer(fromUserId);
       }
     };
@@ -400,13 +509,74 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
       }
     };
 
+    // Zero-leak, ultra-low-latency 24kHz PCM receiver for 200+ audience members & 4G NAT fallback
+    const handleRelayChunk = ({
+      speakerId,
+      chunk,
+    }: {
+      speakerId: string;
+      chunk: ArrayBuffer;
+    }) => {
+      // Only skip relay if direct WebRTC P2P is genuinely connected & active
+      if (!speakerId || speakerId === currentUserId || connectedPeers.current.has(speakerId)) {
+        return;
+      }
+
+      try {
+        const gainVal = computeSpeakerGain(speakerId);
+        if (gainVal <= 0.001) return;
+
+        const ctx = getAudioContext();
+        const pcm16 = new Int16Array(chunk);
+        if (pcm16.length === 0) return;
+
+        const buffer = ctx.createBuffer(1, pcm16.length, 24000);
+        const channelData = buffer.getChannelData(0);
+        for (let i = 0; i < pcm16.length; i++) {
+          channelData[i] = pcm16[i] / 32768.0;
+        }
+
+        // Reuse ONE single persistent GainNode per speaker (prevents WebAudio graph memory leaks!)
+        let gainNode = relayGainNodes.current.get(speakerId);
+        if (!gainNode) {
+          gainNode = ctx.createGain();
+          gainNode.connect(ctx.destination);
+          relayGainNodes.current.set(speakerId, gainNode);
+        }
+        gainNode.gain.value = gainVal;
+
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(gainNode);
+        source.onended = () => {
+          try {
+            source.disconnect();
+          } catch (e) {}
+        };
+
+        const now = ctx.currentTime;
+        let nextTime = nextPlayTimeMap.current.get(speakerId) || 0;
+        // Strict per-speaker anti-drift (<55ms max buffer window)
+        if (nextTime < now) {
+          nextTime = now + 0.012;
+        } else if (nextTime - now > 0.055) {
+          nextTime = now + 0.015;
+        }
+        source.start(nextTime);
+        nextPlayTimeMap.current.set(speakerId, nextTime + buffer.duration);
+      } catch (e) {
+        // Ignored
+      }
+    };
+
     socket.on('signal:offer', handleOffer);
     socket.on('signal:answer', handleAnswer);
     socket.on('signal:ice', handleIce);
     socket.on('signal:request', handleRequest);
     socket.on('signal:stop', handleStop);
+    socket.on('audio:relay_chunk', handleRelayChunk);
 
-    // Announce to the room that we are ready to receive audio streams
+    // Announce to active speakers that we are ready to receive audio streams
     socket.emit('signal:request', { roomId, room_id: roomId });
 
     return () => {
@@ -415,29 +585,93 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
       socket.off('signal:ice', handleIce);
       socket.off('signal:request', handleRequest);
       socket.off('signal:stop', handleStop);
+      socket.off('audio:relay_chunk', handleRelayChunk);
     };
-  }, [socket, roomId, currentUserId, stream, createAndSendOffer, cleanupPeer, handleRemoteStream]);
+  }, [
+    socket,
+    roomId,
+    currentUserId,
+    stream,
+    createAndSendOffer,
+    cleanupPeer,
+    handleRemoteStream,
+    attachConnectionStateTracker,
+    computeSpeakerGain,
+    getAudioContext,
+  ]);
 
-  // 1. Stream lifecycle: When local mic stream starts or stops
+  // 1. Stream lifecycle: P2P Offers (prioritizing stage peers, capped at MAX_P2P_PEERS) + Off-Main-Thread AudioWorklet Broadcast for 200+ Audience
   useEffect(() => {
     if (!socket || !roomId || !stream) return;
 
-    const activePeers = useRoomStore.getState().members.filter((m) => m.user_id !== currentUserId);
-    activePeers.slice(0, 25).forEach((m) => {
+    const allPeers = useRoomStore.getState().members.filter((m) => m.user_id !== currentUserId);
+    // Prioritize OWNER, SPEAKER, MODERATOR first for direct P2P
+    const sortedPeers = [...allPeers].sort((a, b) => {
+      const score = (r: string) => (r === 'OWNER' || r === 'SPEAKER' ? 0 : r === 'MODERATOR' ? 1 : 2);
+      return score(a.role) - score(b.role);
+    });
+    sortedPeers.slice(0, MAX_P2P_PEERS).forEach((m) => {
       createAndSendOffer(m.user_id);
     });
 
+    // Off-main-thread AudioWorklet broadcaster for the 200+ audience
+    let cancelled = false;
+    let sourceNode: MediaStreamAudioSourceNode | null = null;
+    let workletNode: AudioWorkletNode | null = null;
+    let silentGain: GainNode | null = null;
+
+    const setupWorkletBroadcaster = async () => {
+      try {
+        const ctx = getAudioContext();
+        if (ctx.audioWorklet && !workletLoadedRef.current) {
+          await ctx.audioWorklet.addModule(getWorkletUrl());
+          workletLoadedRef.current = true;
+        }
+        if (cancelled || !ctx.audioWorklet) return;
+
+        sourceNode = ctx.createMediaStreamSource(stream);
+        workletNode = new AudioWorkletNode(ctx, 'donglua-mic-processor');
+        workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+          if (useAudioStore.getState().isMuted) return;
+          socket.volatile.emit('audio:relay_chunk', {
+            roomId,
+            chunk: event.data,
+          });
+        };
+
+        silentGain = ctx.createGain();
+        silentGain.gain.value = 0;
+        sourceNode.connect(workletNode);
+        workletNode.connect(silentGain);
+        silentGain.connect(ctx.destination);
+      } catch (err) {
+        console.warn('[WebRTC] AudioWorklet broadcaster fallback:', err);
+      }
+    };
+
+    setupWorkletBroadcaster();
+
     return () => {
+      cancelled = true;
+      try {
+        workletNode?.port.close();
+        workletNode?.disconnect();
+        sourceNode?.disconnect();
+        silentGain?.disconnect();
+      } catch (e) {}
       socket.emit('signal:stop', { roomId, room_id: roomId });
     };
-  }, [stream, socket, roomId, currentUserId, createAndSendOffer]);
+  }, [stream, socket, roomId, currentUserId, createAndSendOffer, getAudioContext]);
 
-  // 2. Members diff: Only connect to NEW peers that don't have an active RTCPeerConnection yet
+  // 2. Members diff: Connect P2P to new Stage Peers (or up to MAX_P2P_PEERS) without touching existing connections
   useEffect(() => {
     if (!socket || !roomId || !stream) return;
 
-    const activePeers = members.filter((m) => m.user_id !== currentUserId);
-    activePeers.slice(0, 25).forEach((m) => {
+    const allPeers = members.filter((m) => m.user_id !== currentUserId);
+    for (const m of allPeers) {
+      const isStagePeer = m.role === 'OWNER' || m.role === 'SPEAKER' || m.role === 'MODERATOR';
+      if (!isStagePeer && peerConnections.current.size >= MAX_P2P_PEERS) continue;
+
       const existingPc = peerConnections.current.get(m.user_id);
       if (
         !existingPc ||
@@ -446,7 +680,7 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
       ) {
         createAndSendOffer(m.user_id);
       }
-    });
+    }
   }, [members, stream, socket, roomId, currentUserId, createAndSendOffer]);
 
   // Cleanup on unmount

@@ -149,13 +149,13 @@ export const RoomSidebar: React.FC<RoomSidebarProps> = ({
   const songQueue = useRoomStore((s) => s.songQueue).filter((s) => s.status === 'queued');
   const user = useAuthStore((s) => s.user);
 
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const chatListRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (activeTab === 'chat') {
-      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (activeTab === 'chat' && chatListRef.current) {
+      chatListRef.current.scrollTop = chatListRef.current.scrollHeight;
     }
-  }, [chatMessages, activeTab]);
+  }, [chatMessages.length, activeTab]);
 
   // Click outside to close emoji picker
   useEffect(() => {
@@ -309,7 +309,7 @@ export const RoomSidebar: React.FC<RoomSidebarProps> = ({
       {activeTab === 'chat' && (
         <div className="flex-1 flex flex-col justify-between overflow-hidden relative">
           {/* Message List */}
-          <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
+          <div ref={chatListRef} className="flex-1 overflow-y-auto p-3.5 space-y-3">
             {chatMessages.length === 0 ? (
               <div className="text-center py-12 text-text-secondary text-xs space-y-1">
                 <div className="text-2xl">👋</div>
@@ -392,7 +392,6 @@ export const RoomSidebar: React.FC<RoomSidebarProps> = ({
                 );
               })
             )}
-            <div ref={chatEndRef} />
           </div>
 
           {/* Quick Cheer Reaction Bar (1 Chạm Cổ Vũ) */}

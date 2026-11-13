@@ -59,7 +59,7 @@ function scheduleSave() {
   if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
   saveDebounceTimer = setTimeout(() => {
     saveDbToFile();
-  }, 2000); // 2s debounce, async non-blocking save
+  }, 10000); // 10s debounce to prevent frequent WASM export stalls under high concurrency
 }
 
 // Ensure synchronous flush on process exit
