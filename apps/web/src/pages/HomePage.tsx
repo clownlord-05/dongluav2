@@ -95,7 +95,7 @@ export const HomePage: React.FC = () => {
                 className="px-5 py-3 rounded-2xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 text-xs font-extrabold flex items-center space-x-2 transition cursor-pointer"
               >
                 <Heart className="w-4 h-4 fill-rose-400 text-rose-400" />
-                <span>Giới Thiệu &amp; Donate</span>
+                <span>Giới Thiệu và Góp Ý</span>
               </button>
             </div>
           </div>
@@ -190,8 +190,8 @@ export const HomePage: React.FC = () => {
 
         {/* Footer Credit */}
         <footer className="mt-10 pt-6 border-t border-white/10 text-center">
-          <p className="text-xs sm:text-sm font-semibold text-text-secondary tracking-wide">
-            được nghĩ và phát triển bởi một mình tao - <span className="text-white font-extrabold">Nguyen Manh Tung</span>
+          <p className="text-xs sm:text-sm font-bold text-text-secondary tracking-wider uppercase">
+            ĐƯỢC NGHĨ VÀ PHÁT TRIỂN BỞI MỘT MÌNH TAO - <span className="text-white font-extrabold">NGUYEN MANH TUNG</span>
           </p>
         </footer>
       </main>

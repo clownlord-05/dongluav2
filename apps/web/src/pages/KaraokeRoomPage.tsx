@@ -712,14 +712,14 @@ export const KaraokeRoomPage: React.FC = () => {
       </div>
 
         <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
-          {/* Giới thiệu & Donate Button */}
+          {/* Giới thiệu và Góp ý Button */}
           <button
             onClick={() => setShowAboutModal(true)}
             className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 font-extrabold text-xs transition cursor-pointer shadow-sm"
-            title="Giới thiệu chung, Góp ý & Donate"
+            title="Giới Thiệu và Góp Ý"
           >
             <Heart className="w-3.5 h-3.5 fill-rose-400 text-rose-400 animate-pulse" />
-            <span className="text-[11px] hidden md:inline">Donate</span>
+            <span className="text-[11px] hidden md:inline">Giới Thiệu và Góp Ý</span>
           </button>
 
           {/* Quick Audio Settings Button in Top Header */}
