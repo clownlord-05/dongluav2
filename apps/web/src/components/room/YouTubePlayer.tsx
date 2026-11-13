@@ -59,9 +59,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
   const beatSyncOffsetMs = useAudioStore((s) => s.beatSyncOffsetMs);
 
   const [localVolume, setLocalVolume] = useState(80);
-  const [currentTime, setCurrentTime] = useState(0);
   const currentTimeRef = useRef(0);
-  const [duration, setDuration] = useState(0);
   const [userInteracted, setUserInteracted] = useState(false);
 
   // Cache initial start second per video_id so iframe src NEVER mutates during playback!
@@ -128,16 +126,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         if (data?.event === 'infoDelivery' && data.info) {
           if (typeof data.info.currentTime === 'number') {
-            const newTime = data.info.currentTime;
-            const prevFloor = Math.floor(currentTimeRef.current);
-            currentTimeRef.current = newTime;
-            // Only trigger React state update once per integer second to avoid 10fps re-renders
-            if (Math.floor(newTime) !== prevFloor) {
-              setCurrentTime(newTime);
-            }
-          }
-          if (typeof data.info.duration === 'number' && data.info.duration > 0) {
-            setDuration((prev) => (Math.floor(prev) !== Math.floor(data.info.duration) ? data.info.duration : prev));
+            currentTimeRef.current = data.info.currentTime;
           }
           if (typeof data.info.playerState === 'number') {
             // -1: unstarted, 0: ended, 1: playing, 2: paused, 3: buffering, 5: cued
@@ -186,7 +175,6 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
       if (Math.abs(currentTimeRef.current - targetPos) > 0.35) {
         postIframeCommand('seekTo', [targetPos, true]);
         currentTimeRef.current = targetPos;
-        setCurrentTime(targetPos);
       }
     }
   }, [
@@ -251,18 +239,6 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
     }
   };
 
-  const handleHostSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!isHost || !playback?.video_id) return;
-    const newPos = parseFloat(e.target.value);
-    currentTimeRef.current = newPos;
-    setCurrentTime(newPos);
-    postIframeCommand('seekTo', [newPos, true]);
-    const socket = (window as any).__SOCKET__;
-    if (socket) {
-      socket.emit('youtube:seek', { roomId, position: newPos });
-    }
-  };
-
   // Direct Search execution
   const performSearch = async (queryToSearch: string) => {
     const q = queryToSearch.trim();
@@ -320,12 +296,6 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
     setSearchQuery('');
     setSearchResults([]);
     setShowInlineSearch(false);
-  };
-
-  const formatTime = (secs: number) => {
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
   const currentSongTitle = playback?.title || 'Karaoke Beat Chuẩn';
@@ -612,25 +582,6 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
 
       {/* Control Bar Below Player */}
       <div className="p-2.5 md:p-3 bg-bg-card border-t border-white/10 flex flex-col space-y-2">
-        {/* Progress Bar (Interactive for Host, display for Audience) */}
-        {playback?.video_id && (
-          <div className="flex items-center space-x-3 text-xs text-text-secondary select-none">
-            <span>{formatTime(currentTime)}</span>
-            <input
-              type="range"
-              min={0}
-              max={duration || 100}
-              value={currentTime}
-              disabled={!isHost}
-              onChange={handleHostSeek}
-              className={`flex-1 h-1.5 rounded-lg appearance-none bg-white/20 accent-primary ${
-                isHost ? 'cursor-pointer hover:bg-white/30' : 'cursor-default'
-              }`}
-            />
-            <span>{formatTime(duration)}</span>
-          </div>
-        )}
-
         {/* Controls Row */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           {/* Left: Playback & Search controls */}
