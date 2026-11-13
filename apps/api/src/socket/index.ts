@@ -5,6 +5,7 @@ import { getActiveMember, joinRoom, leaveRoom, setMemberRole, setMemberMuted, se
 import { getRoomById, validateRoomPassword, closeRoom } from '../services/roomService';
 import { loadVideo, playAt, pauseAt, seekTo, getPlayback, computeCurrentPosition } from '../services/youtubeService';
 import { raiseHand, cancelHandRequest, reviewHandRequest } from '../services/handRequestService';
+import { getOrRestoreSession } from '../middleware/auth';
 import { v4 as uuidv4 } from 'uuid';
 
 let io: SocketIOServer | null = null;
@@ -56,13 +57,11 @@ export function initSocket(server: HttpServer): SocketIOServer {
     }
 
     try {
-      const db = getDb();
-      const session = db.prepare(`
-        SELECT s.user_id, u.username, u.display_name, u.avatar_seed
-        FROM sessions s
-        JOIN users u ON u.id = s.user_id
-        WHERE s.token = ? AND s.expires_at > datetime('now')
-      `).get(token) as { user_id: string; username: string; display_name: string; avatar_seed: string } | undefined;
+      const session = getOrRestoreSession(token, {
+        userId: socket.handshake.auth?.userId,
+        displayName: socket.handshake.auth?.displayName,
+        avatarSeed: socket.handshake.auth?.avatarSeed,
+      });
 
       if (!session) {
         return next(new Error('Invalid or expired session'));

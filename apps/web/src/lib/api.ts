@@ -14,7 +14,7 @@ const api = axios.create({
 
 let sessionPromise: Promise<string> | null = null;
 
-export async function ensureAuthToken(): Promise<string> {
+export async function ensureAuthToken(preferredName?: string): Promise<string> {
   const currentToken = useAuthStore.getState().token;
   if (currentToken) return currentToken;
 
@@ -22,12 +22,13 @@ export async function ensureAuthToken(): Promise<string> {
 
   sessionPromise = (async () => {
     try {
-      const defaultName = `Ca Sĩ #${Math.floor(1000 + Math.random() * 9000)}`;
-      const randomUser = `user_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+      const existingUser = useAuthStore.getState().user;
+      const defaultName = preferredName || existingUser?.display_name || `Ca Sĩ #${Math.floor(1000 + Math.random() * 9000)}`;
+      const randomUser = existingUser?.username || `user_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
       const res = await axios.post<{ user: import('../types').User; token: string }>('/api/auth/session', {
         username: randomUser,
         display_name: defaultName,
-        avatar_seed: randomUser,
+        avatar_seed: existingUser?.avatar_seed || randomUser,
       });
       useAuthStore.getState().setAuth(res.data.user, res.data.token);
       return res.data.token;
@@ -52,15 +53,33 @@ api.interceptors.request.use(async (config) => {
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    const user = useAuthStore.getState().user;
+    if (user) {
+      config.headers['x-user-id'] = user.id;
+      config.headers['x-user-name'] = encodeURIComponent(user.display_name || '');
+      if (user.avatar_seed && user.avatar_seed.length < 512) {
+        config.headers['x-user-avatar'] = encodeURIComponent(user.avatar_seed);
+      }
+    }
   }
   return config;
 });
 
 api.interceptors.response.use(
   (res) => res,
-  (err) => {
-    if (err.response?.status === 401) {
+  async (err) => {
+    const originalConfig = err.config;
+    if (err.response?.status === 401 && originalConfig && !originalConfig._retry) {
+      originalConfig._retry = true;
+      const savedName = useAuthStore.getState().user?.display_name;
       useAuthStore.getState().logout();
+      try {
+        const newToken = await ensureAuthToken(savedName);
+        originalConfig.headers.Authorization = `Bearer ${newToken}`;
+        return api.request(originalConfig);
+      } catch (retryErr) {
+        return Promise.reject(retryErr);
+      }
     }
     return Promise.reject(err);
   }

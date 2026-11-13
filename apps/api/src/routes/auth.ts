@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../db';
 import { v4 as uuidv4 } from 'uuid';
 import { authLimiter } from '../middleware/rateLimiter';
+import { getOrRestoreSession, extractUserHints } from '../middleware/auth';
 
 const router = Router();
 
@@ -94,10 +95,7 @@ router.get('/me', (req: Request, res: Response): void => {
   }
   const token = auth.slice(7);
   const db = getDb();
-  const session = db.prepare(`
-    SELECT s.user_id FROM sessions s
-    WHERE s.token = ? AND s.expires_at > datetime('now')
-  `).get(token) as { user_id: string } | undefined;
+  const session = getOrRestoreSession(token, extractUserHints(req));
 
   if (!session) {
     res.status(401).json({ error: 'Invalid session' });
@@ -124,10 +122,7 @@ router.patch('/profile', (req: Request, res: Response): void => {
   }
   const token = auth.slice(7);
   const db = getDb();
-  const session = db.prepare(`
-    SELECT s.user_id FROM sessions s
-    WHERE s.token = ? AND s.expires_at > datetime('now')
-  `).get(token) as { user_id: string } | undefined;
+  const session = getOrRestoreSession(token, extractUserHints(req));
 
   if (!session) {
     res.status(401).json({ error: 'Invalid session' });
@@ -165,10 +160,7 @@ router.post('/profile', (req: Request, res: Response): void => {
   }
   const token = auth.slice(7);
   const db = getDb();
-  const session = db.prepare(`
-    SELECT s.user_id FROM sessions s
-    WHERE s.token = ? AND s.expires_at > datetime('now')
-  `).get(token) as { user_id: string } | undefined;
+  const session = getOrRestoreSession(token, extractUserHints(req));
 
   if (!session) {
     res.status(401).json({ error: 'Invalid session' });
