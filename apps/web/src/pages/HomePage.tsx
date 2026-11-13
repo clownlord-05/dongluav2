@@ -187,6 +187,13 @@ export const HomePage: React.FC = () => {
 
         {/* Giới Thiệu Chung, Góp Ý & Donate Section */}
         <AboutContent />
+
+        {/* Footer Credit */}
+        <footer className="mt-10 pt-6 border-t border-white/10 text-center">
+          <p className="text-xs sm:text-sm font-semibold text-text-secondary tracking-wide">
+            được nghĩ và phát triển bởi một mình tao - <span className="text-white font-extrabold">Nguyen Manh Tung</span>
+          </p>
+        </footer>
       </main>
 
       {/* Modals */}
