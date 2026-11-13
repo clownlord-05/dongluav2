@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --dev --bind 0.0.0.0
+    ports:
+      - "7880:7880"       # HTTP / WebSocket
+      - "7881:7881"       # RTC TCP
+      - "50100-50200:50100-50200/udp"  # RTC UDP range
+    environment:
+      - LIVEKIT_KEYS=devkey:devsecret
+    restart: unless-stopped
+
+  # Optional: Redis for LiveKit distributed mode
+  # redis:
+  #   image: redis:7-alpine
+  #   ports:
+  #     - "6379:6379"
+  #   restart: unless-stopped

@@ -1,0 +1,37 @@
+# fly.toml — Fly.io deployment config for ĐỐNG LỬA V2 backend
+# Docs: https://fly.io/docs/reference/configuration/
+
+app = "dongluav2"
+primary_region = "sin"   # Singapore — gần Việt Nam nhất
+
+[build]
+  # Build from root of monorepo
+  dockerfile = "Dockerfile.fly"
+
+[env]
+  PORT = "3001"
+  NODE_ENV = "production"
+  # CORS_ORIGIN sẽ được set bằng fly secrets (xem hướng dẫn)
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+  auto_stop_machines = false   # QUAN TRỌNG: không ngủ bao giờ!
+  auto_start_machines = true
+  min_machines_running = 1     # Luôn có ít nhất 1 máy chạy
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/api/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"       # Free tier (256MB RAM)
+  memory = "256mb"
+
+[mounts]
+  source = "dongluav2_data"
+  destination = "/app/data"    # Persistent volume cho SQLite DB
+  initial_size = "1gb"

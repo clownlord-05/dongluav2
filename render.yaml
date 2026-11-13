@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: dong-lua-v2
+    env: docker
+    dockerfilePath: Dockerfile
+    plan: free
+    region: singapore
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CORS_ORIGIN
+        value: "*"

@@ -1,0 +1,13 @@
+# .dockerignore — Exclude unnecessary files from Docker build context
+node_modules
+.git
+.gitignore
+*.md
+*.log
+.env
+.env.local
+apps/api/data
+apps/web/node_modules
+apps/api/node_modules
+dist
+*.fly.toml

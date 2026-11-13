@@ -1,0 +1,59 @@
+# Dockerfile.fly — Optimized production image for Fly.io
+# Multi-stage build: smaller final image, faster deploys
+
+# ---- Stage 1: Builder ----
+FROM node:20-alpine AS builder
+
+WORKDIR /build
+
+# Copy package files for all workspaces
+COPY package*.json ./
+COPY apps/api/package*.json ./apps/api/
+COPY apps/web/package*.json ./apps/web/
+
+# Install all deps (including devDeps for build)
+RUN npm ci --workspace=apps/api --workspace=apps/web
+
+# Copy source
+COPY apps/api ./apps/api
+COPY apps/web ./apps/web
+
+# Build API (TypeScript → dist/)
+RUN npm run build --workspace=apps/api
+
+# Build Web (Vite → dist/)
+RUN npm run build --workspace=apps/web
+
+# ---- Stage 2: Production Runtime ----
+FROM node:20-alpine AS runtime
+
+WORKDIR /app
+
+# Only copy production deps
+COPY apps/api/package*.json ./
+RUN npm ci --omit=dev
+
+# Copy compiled API
+COPY --from=builder /build/apps/api/dist ./dist
+COPY --from=builder /build/apps/api/src/db/schema.sql ./src/db/schema.sql
+
+# Copy compiled frontend (served as static files by Express)
+COPY --from=builder /build/apps/web/dist ./web/dist
+
+# Copy sql.js WASM (required for in-memory SQLite)
+RUN cp -r node_modules/sql.js/dist ./sql_wasm 2>/dev/null || true
+
+# Persistent data directory (mounted as Fly volume)
+RUN mkdir -p /app/data
+
+# Set environment
+ENV NODE_ENV=production
+ENV PORT=3001
+ENV DATABASE_PATH=/app/data/dongluav2.db
+
+EXPOSE 3001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD wget -qO- http://localhost:3001/api/health || exit 1
+
+CMD ["node", "--max-old-space-size=256", "dist/index.js"]

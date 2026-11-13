@@ -1,0 +1,19 @@
+{
+  "name": "dong-lua-v2",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace=apps/api\" \"npm run dev --workspace=apps/web\"",
+    "build": "npm run build --workspace=apps/api && npm run build --workspace=apps/web",
+    "build:api": "npm run build --workspace=apps/api",
+    "build:web": "npm run build --workspace=apps/web",
+    "start": "npm run start --workspace=apps/api",
+    "install:all": "npm install",
+    "deploy:fly": "fly deploy",
+    "deploy:check": "fly status"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
