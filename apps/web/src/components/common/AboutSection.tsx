@@ -144,13 +144,13 @@ export const AboutContent: React.FC = () => {
             {/* QR Image */}
             <div
               onClick={() => setZoomQr(true)}
-              className="relative group cursor-pointer rounded-2xl overflow-hidden border-2 border-accent/40 shadow-2xl bg-white max-w-[230px] w-full aspect-[3/4] flex items-center justify-center"
+              className="relative group cursor-pointer rounded-2xl overflow-hidden border-2 border-accent/40 shadow-2xl bg-black max-w-[230px] w-full flex items-center justify-center"
               title="Nhấn để phóng to mã QR"
             >
               <img
-                src="/donate-qr.jpg"
+                src="/donate-qr.jpg?v=2"
                 alt="Mã QR Donate MB Bank 051220048999"
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                className="w-full h-auto max-h-[320px] object-contain group-hover:scale-105 transition-transform duration-300"
               />
               <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-2 flex items-center justify-center space-x-1 text-[11px] font-bold text-white">
                 <ZoomIn className="w-3.5 h-3.5 text-accent" />
@@ -183,7 +183,7 @@ export const AboutContent: React.FC = () => {
               <span>MB Bank: 051220048999</span>
             </div>
             <img
-              src="/donate-qr.jpg"
+              src="/donate-qr.jpg?v=2"
               alt="Mã QR Donate"
               className="w-full max-h-[70vh] object-contain rounded-2xl bg-white"
             />
