@@ -2,7 +2,7 @@ import React from 'react';
 import { useRoomStore } from '../../store/roomStore';
 import { useAuthStore } from '../../store/authStore';
 import Avatar from '../common/Avatar';
-import { Mic, MicOff, Volume2, UserX, MoreVertical } from 'lucide-react';
+import { Mic, MicOff, Volume2, UserX, MoreVertical, Sliders } from 'lucide-react';
 
 interface StagePodiumProps {
   roomId: string;
@@ -12,6 +12,7 @@ interface StagePodiumProps {
   onRemoveSpeaker?: (userId: string) => void;
   getTriggerProps?: (target: any) => any;
   onOpenContextMenu?: (target: any, x: number, y: number) => void;
+  onOpenAudioSettings?: () => void;
 }
 
 export const StagePodium: React.FC<StagePodiumProps> = ({
@@ -22,6 +23,7 @@ export const StagePodium: React.FC<StagePodiumProps> = ({
   onRemoveSpeaker,
   getTriggerProps,
   onOpenContextMenu,
+  onOpenAudioSettings,
 }) => {
   const members = useRoomStore((s) => s.members);
   const currentUserId = useAuthStore((s) => s.user?.id);
@@ -30,17 +32,29 @@ export const StagePodium: React.FC<StagePodiumProps> = ({
   const speakers = members.filter((m) => m.role === 'SPEAKER' || m.role === 'OWNER');
 
   return (
-    <div className="bg-bg-panel/70 border border-white/10 rounded-2xl p-4 shadow-xl select-none">
-      <div className="flex items-center justify-between mb-3">
+    <div className="bg-bg-panel/70 border border-white/10 rounded-2xl p-3 sm:p-4 shadow-xl select-none">
+      <div className="flex items-center justify-between mb-2.5">
         <div className="flex items-center space-x-2">
           <div className="w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
           <h3 className="text-xs font-bold uppercase tracking-wider text-white">
             Sân Khấu Trực Tiếp ({speakers.length})
           </h3>
         </div>
-        <span className="text-[11px] text-text-secondary">
-          Micro RAW 48kHz • Không lọc âm
-        </span>
+        {onOpenAudioSettings ? (
+          <button
+            type="button"
+            onClick={onOpenAudioSettings}
+            className="flex items-center space-x-1 px-2 py-0.5 rounded-lg bg-accent/15 hover:bg-accent/25 border border-accent/30 text-accent text-[11px] font-bold transition cursor-pointer"
+            title="Nhấn để mở Cài đặt Mic & Chỉnh âm thanh"
+          >
+            <Sliders className="w-3 h-3 text-accent" />
+            <span>Chỉnh Âm Thanh</span>
+          </button>
+        ) : (
+          <span className="text-[11px] text-text-secondary">
+            Micro RAW 48kHz • Không lọc âm
+          </span>
+        )}
       </div>
 
       {speakers.length === 0 ? (

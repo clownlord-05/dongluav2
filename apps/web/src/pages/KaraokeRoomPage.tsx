@@ -17,7 +17,7 @@ import NicknameModal from '../components/common/NicknameModal';
 import Avatar from '../components/common/Avatar';
 import UserContextMenu from '../components/common/UserContextMenu';
 import { useUserContextMenu } from '../hooks/useUserContextMenu';
-import { Flame, Copy, Check, LogOut, Share2, ShieldAlert, MessageSquare, Power, AlertTriangle } from 'lucide-react';
+import { Flame, Copy, Check, LogOut, Share2, ShieldAlert, MessageSquare, Power, AlertTriangle, Sliders, Headphones } from 'lucide-react';
 
 export const KaraokeRoomPage: React.FC = () => {
   const { roomId } = useParams<{ roomId: string }>();
@@ -546,11 +546,11 @@ export const KaraokeRoomPage: React.FC = () => {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-bg-base text-text-primary overflow-hidden select-none">
+    <div className="fixed inset-0 h-[100dvh] w-full flex flex-col bg-bg-base text-text-primary overflow-hidden select-none">
       {/* Room Top Bar */}
-      <header className="h-14 bg-bg-panel border-b border-white/10 px-4 flex items-center justify-between shrink-0 shadow-sm">
-        <div className="flex items-center space-x-3 min-w-0">
-          <a href="/" className="flex items-center space-x-2 text-primary font-black text-sm">
+      <header className="h-14 bg-bg-panel border-b border-white/10 px-3 sm:px-4 flex items-center justify-between shrink-0 shadow-sm z-20">
+        <div className="flex items-center space-x-2 sm:space-x-3 min-w-0">
+          <a href="/" className="flex items-center space-x-1.5 sm:space-x-2 text-primary font-black text-sm shrink-0">
             <Flame className="w-5 h-5 text-primary" />
             <span className="hidden sm:inline">ĐỐNG LỬA V2</span>
           </a>
@@ -558,13 +558,13 @@ export const KaraokeRoomPage: React.FC = () => {
           <div className="h-4 w-px bg-white/10 hidden sm:block" />
 
           <div className="min-w-0">
-            <div className="flex items-center space-x-2">
-              <h1 className="text-xs md:text-sm font-extrabold text-white truncate max-w-[200px] md:max-w-xs">
+            <div className="flex items-center space-x-1.5 sm:space-x-2">
+              <h1 className="text-xs md:text-sm font-extrabold text-white truncate max-w-[130px] sm:max-w-xs">
                 {store.room?.name || 'Phòng Karaoke'}
               </h1>
               <button
                 onClick={handleCopyLink}
-                className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] font-mono text-accent font-bold transition"
+                className="flex items-center space-x-1 px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] font-mono text-accent font-bold transition shrink-0"
                 title="Sao chép link mời phòng"
               >
                 {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
@@ -579,16 +579,26 @@ export const KaraokeRoomPage: React.FC = () => {
         </div>
       </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
+          {/* Quick Audio Settings Button in Top Header */}
+          <button
+            onClick={() => setShowAudioSettings(true)}
+            className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-accent/15 hover:bg-accent/25 border border-accent/40 text-accent font-extrabold text-xs transition cursor-pointer shadow-sm"
+            title="Mở Cài đặt Mic & Âm thanh"
+          >
+            <Sliders className="w-3.5 h-3.5 text-accent" />
+            <span className="text-[11px] hidden sm:inline">Âm Thanh</span>
+          </button>
+
           {/* User Profile / Avatar Pill */}
           {user && (
             <button
               onClick={() => setShowProfileModal(true)}
-              className="flex items-center space-x-2 pl-1.5 pr-2.5 py-1 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 transition-all cursor-pointer group"
+              className="flex items-center space-x-1.5 pl-1 pr-2 py-0.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 transition-all cursor-pointer group"
               title="Đổi Avatar & Nickname của bạn"
             >
               <Avatar name={user.display_name} seed={user.avatar_seed} size="sm" />
-              <span className="text-xs font-bold text-white max-w-[90px] truncate hidden sm:inline group-hover:text-primary transition-colors">
+              <span className="text-xs font-bold text-white max-w-[70px] sm:max-w-[90px] truncate hidden sm:inline group-hover:text-primary transition-colors">
                 {user.display_name}
               </span>
             </button>
@@ -596,7 +606,7 @@ export const KaraokeRoomPage: React.FC = () => {
 
           <button
             onClick={handleCopyLink}
-            className="hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-semibold text-text-secondary hover:text-white transition"
+            className="hidden md:flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-semibold text-text-secondary hover:text-white transition"
           >
             <Share2 className="w-3.5 h-3.5 text-accent" />
             <span>{copied ? 'Đã chép link!' : 'Mời bạn'}</span>
@@ -606,17 +616,17 @@ export const KaraokeRoomPage: React.FC = () => {
           {isHost && (
             <button
               onClick={() => setShowCloseModal(true)}
-              className="px-3 py-1.5 rounded-xl bg-danger hover:bg-red-700 text-white text-xs font-extrabold flex items-center space-x-1.5 transition shadow-md shadow-danger/20"
+              className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-danger hover:bg-red-700 text-white text-xs font-extrabold flex items-center space-x-1 transition shadow-md shadow-danger/20"
               title="Đóng phòng & Giải tán buổi hát"
             >
               <Power className="w-3.5 h-3.5" />
-              <span>Đóng Phòng</span>
+              <span className="text-[11px]">Đóng Phòng</span>
             </button>
           )}
 
           <button
             onClick={handleLeaveRoom}
-            className="p-2 sm:px-3 sm:py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-text-secondary hover:text-white text-xs font-bold flex items-center space-x-1.5 transition"
+            className="p-1.5 sm:px-3 sm:py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-text-secondary hover:text-white text-xs font-bold flex items-center space-x-1.5 transition"
             title="Thoát ra trang chủ"
           >
             <LogOut className="w-4 h-4" />
@@ -626,9 +636,9 @@ export const KaraokeRoomPage: React.FC = () => {
       </header>
 
       {/* Main Spacious 2-Area Discord-Stage Layout */}
-      <main className="flex-1 p-3 md:p-4 flex flex-col lg:flex-row gap-3 md:gap-4 overflow-hidden">
+      <main className="flex-1 p-2.5 sm:p-3 md:p-4 flex flex-col lg:flex-row gap-2.5 sm:gap-3 md:gap-4 overflow-hidden min-h-0">
         {/* Left Area: Sân Khấu Chính (YouTube + Podium) chiếm trọn bên trái */}
-        <section className="flex-1 flex flex-col h-full space-y-3 overflow-y-auto min-w-0 pr-0.5">
+        <section className="flex-1 flex flex-col space-y-2.5 sm:space-y-3 overflow-y-auto min-w-0 pr-0.5">
           {/* YouTube Player */}
           <div className="shrink-0">
             <YouTubePlayer
@@ -639,10 +649,10 @@ export const KaraokeRoomPage: React.FC = () => {
               onOpenSearch={isHost ? () => setShowSearchModal(true) : undefined}
               onSelectPlayNow={handleSearchPlayNow}
             />
-        </div>
+          </div>
 
           {/* Active Singers Podium */}
-          <div className="flex-1 min-h-[160px]">
+          <div className="shrink-0">
             <StagePodium
               roomId={roomId!}
               isHost={isHost}
@@ -651,8 +661,9 @@ export const KaraokeRoomPage: React.FC = () => {
               onRemoveSpeaker={(uid) => handleHostRemoveSpeaker(uid)}
               getTriggerProps={userContextMenu.getTriggerProps}
               onOpenContextMenu={userContextMenu.openMenu}
+              onOpenAudioSettings={() => setShowAudioSettings(true)}
             />
-        </div>
+          </div>
         </section>
 
         {/* Right Area: Sidebar (Desktop side panel OR Mobile slide-over drawer) */}
