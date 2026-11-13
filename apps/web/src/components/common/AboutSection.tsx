@@ -43,17 +43,14 @@ export const AboutContent: React.FC = () => {
           {/* Story Quote Box */}
           <div className="p-4 md:p-5 rounded-2xl bg-black/35 border border-white/10 space-y-3 text-xs md:text-sm text-text-primary leading-relaxed shadow-inner">
             <p>
-              Theo dõi chương trình <span className="text-accent font-extrabold">The New Rên</span> từ những buổi đầu tiên, tao thấy có rất nhiều thí sinh hát cực kỳ hay nhưng lại bị bộ lọc âm của Discord{' '}
-              <span className="text-danger font-bold">&ldquo;bóp hiệu năng&rdquo;</span>, cắt mất nốt cao, nuốt mất tiếng lấy hơi khiến anh em không thể{' '}
-              <span className="text-primary font-extrabold">&ldquo;bùng nổ sức mạnh&rdquo;</span> — nghe thực sự rất khó chịu!
-            </p>
-            <p>
-              Ấp ủ từ chính những cái khó chịu đấy, tao quyết định tự tay làm ra{' '}
-              <span className="text-white font-extrabold">Đống Lửa V2</span> này với luồng thu âm RAW 48kHz nguyên bản không qua lọc bóp nghẹt, với mong muốn giúp{' '}
+              Theo dõi <span className="text-accent font-extrabold">The New Rên</span> từ những buổi đầu, thấy nhiều thí sinh hát rất hay nhưng bị bộ lọc âm của Discord{' '}
+              <span className="text-danger font-bold">&ldquo;bóp hiệu năng&rdquo;</span>, không thể{' '}
+              <span className="text-primary font-extrabold">&ldquo;bùng nổ sức mạnh&rdquo;</span> làm tao khó chịu. Ấp ủ từ đó nên quyết định làm{' '}
+              <span className="text-white font-extrabold">Đống Lửa V2</span> để{' '}
               <span className="text-accent font-extrabold">
-                những &ldquo;con tướng&rdquo; không còn bị nerf sức mạnh trong những mùa sau nữa!
-              </span>{' '}
-              🔥🎤
+                &ldquo;những con tướng không còn bị nerf sức mạnh trong những mùa sau nữa&rdquo;
+              </span>
+              .
             </p>
           </div>
 
