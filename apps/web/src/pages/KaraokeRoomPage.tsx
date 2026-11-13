@@ -28,7 +28,9 @@ export const KaraokeRoomPage: React.FC = () => {
   const store = useRoomStore();
   const socket = useSocket();
   const { captureRaw, stopCapture } = useAudio();
-  const { isConnected, isMuted, setMuted, selectedDeviceId } = useAudioStore();
+  const isMuted = useAudioStore((s) => s.isMuted);
+  const setMuted = useAudioStore((s) => s.setMuted);
+  const selectedDeviceId = useAudioStore((s) => s.selectedDeviceId);
 
   const [copied, setCopied] = useState(false);
   const [showAudioSettings, setShowAudioSettings] = useState(false);

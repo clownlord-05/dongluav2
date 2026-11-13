@@ -50,7 +50,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   const members = useRoomStore((s) => s.members);
   const handQueue = useRoomStore((s) => s.handQueue);
   const stageInvite = useRoomStore((s) => s.stageInvite);
-  const { isConnected, isMuted } = useAudioStore();
+  const isMuted = useAudioStore((s) => s.isMuted);
 
   const myMember = members.find((m) => m.user_id === user?.id);
   const isSpeaker = myMember?.role === 'SPEAKER' || myMember?.role === 'OWNER';

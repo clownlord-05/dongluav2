@@ -68,7 +68,11 @@ export const useAudioStore = create<AudioStore>((set) => ({
   setAudioMode: (audioMode) => set({ audioMode }),
   setBeatSyncOffsetMs: (beatSyncOffsetMs) => set({ beatSyncOffsetMs }),
   setRemoteAudioLevel: (userId, level) =>
-    set((s) => ({ remoteAudioLevels: { ...s.remoteAudioLevels, [userId]: level } })),
+    set((s) => {
+      const prev = s.remoteAudioLevels[userId] ?? 0;
+      if (prev === level) return s;
+      return { remoteAudioLevels: { ...s.remoteAudioLevels, [userId]: level } };
+    }),
 
   setUserVolume: (userId, volume) =>
     set((s) => ({ userVolumes: { ...s.userVolumes, [userId]: volume } })),

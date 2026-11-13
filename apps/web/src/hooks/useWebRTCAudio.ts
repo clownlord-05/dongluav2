@@ -90,7 +90,11 @@ interface RemoteAudioNode {
 export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined) {
   const currentUserId = useAuthStore((s) => s.user?.id);
   const members = useRoomStore((s) => s.members);
-  const { stream, isMuted, userVolumes, userMutes, setRemoteAudioLevel } = useAudioStore();
+  const stream = useAudioStore((s) => s.stream);
+  const isMuted = useAudioStore((s) => s.isMuted);
+  const userVolumes = useAudioStore((s) => s.userVolumes);
+  const userMutes = useAudioStore((s) => s.userMutes);
+  const setRemoteAudioLevel = useAudioStore((s) => s.setRemoteAudioLevel);
 
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
   const remoteNodes = useRef<Map<string, RemoteAudioNode>>(new Map());
@@ -235,13 +239,11 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
     });
   }, [userVolumes, userMutes]);
 
-  // Real-time animation loop to measure remote speakers' RMS levels (0-100)
+  // Lightweight 120ms interval to measure remote speakers' RMS levels (0-100) without 60fps store churn
   useEffect(() => {
-    let active = true;
     const dataArray = new Uint8Array(64);
-
-    const updateLevels = () => {
-      if (!active) return;
+    const interval = setInterval(() => {
+      if (remoteNodes.current.size === 0) return;
       remoteNodes.current.forEach((node, userId) => {
         if (node.analyserNode) {
           node.analyserNode.getByteFrequencyData(dataArray);
@@ -254,13 +256,10 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
           setRemoteAudioLevel(userId, level);
         }
       });
-      animFrameRef.current = requestAnimationFrame(updateLevels);
-    };
+    }, 120);
 
-    updateLevels();
     return () => {
-      active = false;
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      clearInterval(interval);
     };
   }, [setRemoteAudioLevel]);
 
