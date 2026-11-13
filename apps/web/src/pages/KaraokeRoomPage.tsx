@@ -880,26 +880,6 @@ export const KaraokeRoomPage: React.FC = () => {
             </div>
             )}
 
-            {/* Quick 1-Tap Cheer Strip right above the floating icon for instant reactions on phone! */}
-            <div className="flex items-center space-x-1.5 p-1 rounded-full bg-black/80 backdrop-blur-md border border-white/20 shadow-xl">
-              {[
-                { emoji: '👏', text: '👏 Tuyệt vời! Vỗ tay cho ca sĩ nào!' },
-                { emoji: '💐', text: '💐 Tặng ca sĩ một bó hoa tươi thắm!' },
-                { emoji: '🔥', text: '🔥 Hát cháy quá anh em ơi!' },
-                { emoji: '💖', text: '💖 Thả tim nồng nhiệt cho bài hát!' },
-              ].map((c) => (
-                <button
-                  key={c.emoji}
-                  type="button"
-                  onClick={() => handleSendMessage(c.text, 'sticker')}
-                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/25 active:scale-90 flex items-center justify-center text-base transition shadow hover:scale-110"
-                  title={c.text}
-                >
-                  {c.emoji}
-                </button>
-              ))}
-          </div>
-
             {/* Main Floating Chat Icon (Thu phóng button) */}
             <button
               onClick={() => setIsSidebarOpen(true)}
