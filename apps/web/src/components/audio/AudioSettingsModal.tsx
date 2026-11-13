@@ -1,6 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAudioStore } from '../../store/audioStore';
-import { useAudio, acquireMicStream } from '../../hooks/useAudio';
+import {
+  useAudio,
+  acquireMicStream,
+  applyAudioOutputRoute,
+  registerPlaybackAudioContext,
+  unregisterPlaybackAudioContext,
+} from '../../hooks/useAudio';
 import {
   Mic,
   Volume2,
@@ -24,6 +30,9 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({ isOpen, 
   const devices = useAudioStore((s) => s.devices);
   const selectedDeviceId = useAudioStore((s) => s.selectedDeviceId);
   const setSelectedDevice = useAudioStore((s) => s.setSelectedDevice);
+  const outputRoute = useAudioStore((s) => s.outputRoute);
+  const outputDevices = useAudioStore((s) => s.outputDevices);
+  const selectedOutputDeviceId = useAudioStore((s) => s.selectedOutputDeviceId);
   const actual = useAudioStore((s) => s.actual);
   const constraintWarnings = useAudioStore((s) => s.constraintWarnings);
   const audioMode = useAudioStore((s) => s.audioMode);
@@ -67,6 +76,7 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({ isOpen, 
       testStreamRef.current = null;
     }
     if (audioCtxRef.current) {
+      unregisterPlaybackAudioContext(audioCtxRef.current);
       audioCtxRef.current.close().catch(() => {});
       audioCtxRef.current = null;
     }
@@ -115,6 +125,7 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({ isOpen, 
         if (ctx.state === 'suspended') {
           await ctx.resume().catch(() => {});
         }
+        registerPlaybackAudioContext(ctx);
         audioCtxRef.current = ctx;
 
         const source = ctx.createMediaStreamSource(stream);
@@ -489,28 +500,104 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({ isOpen, 
           </select>
         </div>
 
-        {/* 4. Audio Output / Speaker Test */}
-        <div className="bg-bg-panel rounded-2xl p-3.5 border border-white/10 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="p-2 rounded-xl bg-white/5 text-accent">
-              <Volume2 className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="text-xs font-bold text-white">Kiểm tra Loa / Tai Nghe Đầu Ra</div>
-              <div className="text-[10px] text-text-secondary">
-                Phát hợp âm mẫu để kiểm tra tai nghe hoặc loa hoạt động tốt
-              </div>
-            </div>
+        {/* 4. Audio Output Route (Loudspeaker Lock vs Headphones) & Speaker Test */}
+        <div className="bg-bg-panel rounded-2xl p-3.5 border border-accent/30 space-y-3">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-extrabold text-white flex items-center space-x-1.5">
+              <Volume2 className="w-4 h-4 text-accent" />
+              <span>Đầu Ra Âm Thanh (Loa Ngoài / Tai Nghe):</span>
+            </label>
+            <button
+              type="button"
+              onClick={handlePlayTestSound}
+              disabled={isPlayingSound}
+              className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/20 text-white text-[11px] font-bold transition flex items-center space-x-1 disabled:opacity-50 shrink-0 cursor-pointer"
+            >
+              <Play className="w-3 h-3 fill-white" />
+              <span>{isPlayingSound ? 'Đang phát...' : 'Thử Loa'}</span>
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={handlePlayTestSound}
-            disabled={isPlayingSound}
-            className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition flex items-center space-x-1.5 disabled:opacity-50 shrink-0 cursor-pointer"
-          >
-            <Play className="w-3.5 h-3.5 fill-white" />
-            <span>{isPlayingSound ? 'Đang phát...' : 'Thử Loa'}</span>
-          </button>
+
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={async () => {
+                await applyAudioOutputRoute('speaker', 'default');
+                if (testing) {
+                  startTestSession(selectedDeviceId, audioMode);
+                } else if (useAudioStore.getState().stream) {
+                  captureRaw(selectedDeviceId, audioMode);
+                }
+              }}
+              className={`p-3 rounded-2xl border text-left transition flex flex-col justify-between space-y-1 cursor-pointer ${
+                outputRoute === 'speaker'
+                  ? 'bg-accent/20 border-accent text-white shadow-md'
+                  : 'bg-white/5 border-white/10 text-text-secondary hover:text-white'
+              }`}
+            >
+              <div className="flex items-center justify-between font-extrabold text-xs">
+                <span>🔊 Bắt Buộc Loa Ngoài</span>
+                {outputRoute === 'speaker' && <Check className="w-4 h-4 text-accent" />}
+              </div>
+              <p className="text-[10px] opacity-85 leading-snug">
+                Khóa cứng nhạc beat & giọng hát luôn phát ra Loa Ngoài, chống nhảy vào loa trong (loa thoại).
+              </p>
+            </button>
+
+            <button
+              type="button"
+              onClick={async () => {
+                await applyAudioOutputRoute('headphone');
+                if (testing) {
+                  startTestSession(selectedDeviceId, audioMode);
+                } else if (useAudioStore.getState().stream) {
+                  captureRaw(selectedDeviceId, audioMode);
+                }
+              }}
+              className={`p-3 rounded-2xl border text-left transition flex flex-col justify-between space-y-1 cursor-pointer ${
+                outputRoute === 'headphone'
+                  ? 'bg-accent/20 border-accent text-white shadow-md'
+                  : 'bg-white/5 border-white/10 text-text-secondary hover:text-white'
+              }`}
+            >
+              <div className="flex items-center justify-between font-extrabold text-xs">
+                <span>🎧 Chế Độ Tai Nghe</span>
+                {outputRoute === 'headphone' && <Check className="w-4 h-4 text-accent" />}
+              </div>
+              <p className="text-[10px] opacity-85 leading-snug">
+                Truyền âm thanh đầu ra qua Tai nghe khi bạn cắm tai nghe dây hoặc kết nối Bluetooth.
+              </p>
+            </button>
+          </div>
+
+          {outputDevices.length > 0 && (
+            <div className="pt-1 space-y-1">
+              <span className="text-[11px] font-bold text-text-secondary block">
+                Chọn thiết bị đầu ra âm thanh cụ thể:
+              </span>
+              <select
+                value={selectedOutputDeviceId || 'default'}
+                onChange={async (e) => {
+                  const newOutId = e.target.value;
+                  const chosen = outputDevices.find((d) => d.deviceId === newOutId);
+                  const isHp = chosen && /headset|headphone|bluetooth|earphone|airpods|buds|usb|tai nghe/i.test(chosen.label);
+                  await applyAudioOutputRoute(isHp ? 'headphone' : outputRoute, newOutId);
+                }}
+                className="w-full bg-bg-card border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-accent"
+              >
+                <option value="default">
+                  {outputRoute === 'speaker'
+                    ? '🔊 Loa Ngoài Mặc Định (Speakerphone)'
+                    : '🎧 Tai Nghe Đang Kết Nối'}
+                </option>
+                {outputDevices.map((d) => (
+                  <option key={d.deviceId} value={d.deviceId}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {/* 5. Beat & Voice Zero-Delay Sync Calibration */}

@@ -4,6 +4,9 @@ import type { AudioDeviceInfo, AudioConstraintsActual } from '../types';
 interface AudioStore {
   selectedDeviceId: string;
   devices: AudioDeviceInfo[];
+  outputRoute: 'speaker' | 'headphone'; // 'speaker' (forced Loudspeaker default) | 'headphone' (Headset/Bluetooth)
+  selectedOutputDeviceId: string;
+  outputDevices: AudioDeviceInfo[];
   isMuted: boolean;
   gain: number; // 0.0 - 2.0
   stream: MediaStream | null;
@@ -25,6 +28,9 @@ interface AudioStore {
 
   setDevices: (devices: AudioDeviceInfo[]) => void;
   setSelectedDevice: (deviceId: string) => void;
+  setOutputRoute: (route: 'speaker' | 'headphone') => void;
+  setOutputDevices: (devices: AudioDeviceInfo[]) => void;
+  setSelectedOutputDevice: (deviceId: string) => void;
   setMuted: (muted: boolean) => void;
   setGain: (gain: number) => void;
   setStream: (stream: MediaStream | null) => void;
@@ -43,7 +49,10 @@ interface AudioStore {
 export const useAudioStore = create<AudioStore>((set) => ({
   selectedDeviceId: 'default',
   devices: [],
-  isMuted: false,
+  outputRoute: 'speaker',
+  selectedOutputDeviceId: 'default',
+  outputDevices: [],
+  isMuted: true,
   gain: 1.0,
   stream: null,
   actual: null,
@@ -60,6 +69,9 @@ export const useAudioStore = create<AudioStore>((set) => ({
 
   setDevices: (devices) => set({ devices }),
   setSelectedDevice: (selectedDeviceId) => set({ selectedDeviceId }),
+  setOutputRoute: (outputRoute) => set({ outputRoute }),
+  setOutputDevices: (outputDevices) => set({ outputDevices }),
+  setSelectedOutputDevice: (selectedOutputDeviceId) => set({ selectedOutputDeviceId }),
   setMuted: (isMuted) => set({ isMuted }),
   setGain: (gain) => set({ gain }),
   setStream: (stream) => set({ stream }),

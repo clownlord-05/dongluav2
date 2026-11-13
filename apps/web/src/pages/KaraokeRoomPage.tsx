@@ -70,15 +70,12 @@ export const KaraokeRoomPage: React.FC = () => {
   // Ultra-low latency Hybrid P2P + AudioWorklet mesh for singer & 200+ audience
   useWebRTCAudio(socket, roomId);
 
-  // Auto-activate microphone when user is OWNER or SPEAKER in the room
+  // Always release hardware microphone and restore Loudspeaker when leaving the room page
   useEffect(() => {
-    if (myRole === 'OWNER' || myRole === 'SPEAKER') {
-      const { stream, isMuted, selectedDeviceId } = useAudioStore.getState();
-      if (!stream && !isMuted) {
-        captureRaw(selectedDeviceId);
-      }
-    }
-  }, [myRole, captureRaw]);
+    return () => {
+      stopCapture();
+    };
+  }, [stopCapture]);
 
   // Expose socket globally for components needing direct emits
   useEffect(() => {
@@ -509,13 +506,17 @@ export const KaraokeRoomPage: React.FC = () => {
 
   const handleHostMute = useCallback(
     (targetUserId: string, mute: boolean) => {
+      if (targetUserId === useAuthStore.getState().user?.id) {
+        handleToggleMic();
+        return;
+      }
       if (!roomId || !socket) return;
       socket.emit(mute ? 'audio:mute' : 'audio:unmute', {
         roomId,
         targetUserId,
       });
     },
-    [roomId, socket]
+    [roomId, socket, handleToggleMic]
   );
 
   const handleHostGain = useCallback(

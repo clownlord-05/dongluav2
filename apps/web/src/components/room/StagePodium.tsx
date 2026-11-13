@@ -1,6 +1,7 @@
 import React from 'react';
 import { useRoomStore } from '../../store/roomStore';
 import { useAuthStore } from '../../store/authStore';
+import { useAudioStore } from '../../store/audioStore';
 import Avatar from '../common/Avatar';
 import { Mic, MicOff, Volume2, UserX, MoreVertical, Sliders } from 'lucide-react';
 
@@ -27,6 +28,8 @@ export const StagePodium: React.FC<StagePodiumProps> = ({
 }) => {
   const members = useRoomStore((s) => s.members);
   const currentUserId = useAuthStore((s) => s.user?.id);
+  const localIsMuted = useAudioStore((s) => s.isMuted);
+  const hasStream = useAudioStore((s) => !!s.stream);
 
   // Speakers are members with role 'SPEAKER' or 'OWNER'
   const speakers = members.filter((m) => m.role === 'SPEAKER' || m.role === 'OWNER');
@@ -66,6 +69,7 @@ export const StagePodium: React.FC<StagePodiumProps> = ({
           {speakers.map((sp) => {
             const isMe = sp.user_id === currentUserId;
             const isOwner = sp.role === 'OWNER';
+            const isEffectiveMuted = isMe ? localIsMuted || !hasStream : sp.muted;
 
             return (
               <div
@@ -80,8 +84,8 @@ export const StagePodium: React.FC<StagePodiumProps> = ({
                     seed={sp.avatar_seed}
                     size="md"
                     role={sp.role}
-                    isMuted={sp.muted}
-                    isSpeaking={!sp.muted}
+                    isMuted={isEffectiveMuted}
+                    isSpeaking={!isEffectiveMuted}
                   />
 
                   <div className="flex-1 min-w-0">
@@ -96,7 +100,7 @@ export const StagePodium: React.FC<StagePodiumProps> = ({
                       )}
                     </div>
                     <div className="flex items-center space-x-1 mt-0.5">
-                      {sp.muted ? (
+                      {isEffectiveMuted ? (
                         <span className="text-[10px] text-danger flex items-center space-x-1 font-semibold">
                           <MicOff className="w-3 h-3" />
                           <span>Đang tắt mic</span>
@@ -128,7 +132,7 @@ export const StagePodium: React.FC<StagePodiumProps> = ({
                 </div>
 
                 {/* Animated Voice Waveform Bars */}
-                {!sp.muted && (
+                {!isEffectiveMuted && (
                   <div className="flex items-center justify-center space-x-1 h-4 px-2 py-1 bg-black/40 rounded-lg">
                     {[1, 2, 3, 4, 5, 6, 7, 8].map((bar) => (
                       <div
@@ -143,8 +147,8 @@ export const StagePodium: React.FC<StagePodiumProps> = ({
                   </div>
                 )}
 
-                {/* Host Controls for this speaker */}
-                {isHost && (
+                {/* Controls for this speaker (Host or Self) */}
+                {(isHost || isMe) && (
                   <div className="pt-1.5 border-t border-white/5 flex items-center justify-between text-xs">
                     {/* Gain fader */}
                     <div className="flex items-center space-x-1.5 text-text-secondary flex-1 mr-2">
@@ -166,19 +170,19 @@ export const StagePodium: React.FC<StagePodiumProps> = ({
                     <div className="flex items-center space-x-1">
                       {/* Mute button */}
                       <button
-                        onClick={() => onMuteSpeaker && onMuteSpeaker(sp.user_id, !sp.muted)}
+                        onClick={() => onMuteSpeaker && onMuteSpeaker(sp.user_id, !isEffectiveMuted)}
                         className={`p-1.5 rounded-lg border transition ${
-                          sp.muted
+                          isEffectiveMuted
                             ? 'bg-danger/20 border-danger/40 text-danger hover:bg-danger/30'
                             : 'bg-white/5 border-white/10 text-text-secondary hover:text-white'
                         }`}
-                        title={sp.muted ? 'Bật mic' : 'Tắt mic người này'}
+                        title={isEffectiveMuted ? 'Bật mic' : 'Tắt mic người này'}
                       >
-                        {sp.muted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                        {isEffectiveMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
                       </button>
 
                       {/* Remove from stage (cannot remove owner) */}
-                      {!isOwner && onRemoveSpeaker && (
+                      {isHost && !isOwner && onRemoveSpeaker && (
                         <button
                           onClick={() => onRemoveSpeaker(sp.user_id)}
                           className="p-1.5 rounded-lg bg-white/5 border border-white/10 text-text-secondary hover:text-danger hover:border-danger/30 transition"

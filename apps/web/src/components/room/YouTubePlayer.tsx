@@ -2,12 +2,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useYouTubeStore } from '../../store/youtubeStore';
 import { useRoomStore } from '../../store/roomStore';
 import { useAudioStore } from '../../store/audioStore';
+import { useAudio, applyAudioOutputRoute } from '../../hooks/useAudio';
 import { searchYouTube, YouTubeSearchResult } from '../../lib/api';
 import {
   Play,
   Pause,
   SkipForward,
   Volume2,
+  Headphones,
   Music,
   Search,
   Sparkles,
@@ -57,6 +59,8 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
   const setBuffering = useYouTubeStore((s) => s.setBuffering);
   const playback = useRoomStore((s) => s.playback);
   const beatSyncOffsetMs = useAudioStore((s) => s.beatSyncOffsetMs);
+  const outputRoute = useAudioStore((s) => s.outputRoute);
+  const { captureRaw } = useAudio();
 
   const [localVolume, setLocalVolume] = useState(80);
   const currentTimeRef = useRef(0);
@@ -642,10 +646,42 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
             </div>
           )}
 
-          {/* Right: Local Background Music Volume */}
+          {/* Right: Output Route Toggle (Loa Ngoài / Tai Nghe) & Local Background Music Volume */}
           <div className="flex items-center space-x-2 text-text-secondary">
-            <Volume2 className="w-4 h-4 text-accent" />
-            <span className="text-[11px] hidden sm:inline">Nhạc beat:</span>
+            <button
+              type="button"
+              onClick={async () => {
+                const nextRoute = outputRoute === 'speaker' ? 'headphone' : 'speaker';
+                await applyAudioOutputRoute(nextRoute, nextRoute === 'speaker' ? 'default' : undefined);
+                if (useAudioStore.getState().stream) {
+                  const s = useAudioStore.getState();
+                  await captureRaw(s.selectedDeviceId, s.audioMode);
+                }
+              }}
+              className={`px-2.5 py-1 rounded-xl border text-[11px] font-extrabold flex items-center space-x-1 transition cursor-pointer shrink-0 ${
+                outputRoute === 'speaker'
+                  ? 'bg-accent/15 border-accent/40 text-accent hover:bg-accent/25'
+                  : 'bg-primary/20 border-primary/40 text-primary hover:bg-primary/30'
+              }`}
+              title={
+                outputRoute === 'speaker'
+                  ? 'Đang khóa Loa Ngoài (Nhấn để chuyển sang chế độ Tai Nghe)'
+                  : 'Đang ở chế độ Tai Nghe (Nhấn để khóa về Loa Ngoài)'
+              }
+            >
+              {outputRoute === 'speaker' ? (
+                <>
+                  <Volume2 className="w-3.5 h-3.5 text-accent" />
+                  <span>Loa Ngoài</span>
+                </>
+              ) : (
+                <>
+                  <Headphones className="w-3.5 h-3.5 text-primary" />
+                  <span>Tai Nghe</span>
+                </>
+              )}
+            </button>
+
             <input
               type="range"
               min={0}

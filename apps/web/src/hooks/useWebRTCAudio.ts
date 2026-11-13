@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useRoomStore } from '../store/roomStore';
 import { useAuthStore } from '../store/authStore';
 import { useAudioStore } from '../store/audioStore';
+import { registerPlaybackAudioContext, unregisterPlaybackAudioContext } from './useAudio';
 import type { Socket } from 'socket.io-client';
 
 /**
@@ -74,11 +75,13 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
       const CtxClass = window.AudioContext || (window as any).webkitAudioContext;
-      audioContextRef.current = new CtxClass({
+      const ctx = new CtxClass({
         latencyHint: 'interactive',
         sampleRate: 48000,
       });
+      audioContextRef.current = ctx;
       workletLoadedRef.current = false;
+      registerPlaybackAudioContext(ctx);
     }
     if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume().catch(() => {});
@@ -105,6 +108,7 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
     }
     nextPlayTimeMap.current.clear();
     if (audioContextRef.current) {
+      unregisterPlaybackAudioContext(audioContextRef.current);
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
       workletLoadedRef.current = false;

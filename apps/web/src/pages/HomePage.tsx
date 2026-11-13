@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listRooms } from '../lib/api';
+import { stopAllHardwareMicStreams } from '../hooks/useAudio';
 import { Room } from '../types';
 import Header from '../components/common/Header';
 import NicknameModal from '../components/common/NicknameModal';
@@ -32,6 +33,7 @@ export const HomePage: React.FC = () => {
   };
 
   useEffect(() => {
+    stopAllHardwareMicStreams();
     fetchRooms();
     const interval = setInterval(fetchRooms, 6000);
     return () => clearInterval(interval);
