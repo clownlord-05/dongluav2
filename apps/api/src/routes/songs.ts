@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getActiveMember } from '../services/participantService';
 import { loadVideo, playAt } from '../services/youtubeService';
 import { getIo } from '../socket';
-import { SongQueueItem } from '@dongluav2/shared-types';
+import { SongQueueItem } from '../types/shared';
 
 const router = Router();
 

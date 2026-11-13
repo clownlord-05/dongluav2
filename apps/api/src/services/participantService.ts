@@ -1,6 +1,6 @@
 import { getDb } from '../db';
 import { v4 as uuidv4 } from 'uuid';
-import { MemberView, UserRole } from '@dongluav2/shared-types';
+import { MemberView, UserRole } from '../types/shared';
 
 export interface RawMember {
   id: string;

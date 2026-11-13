@@ -41,6 +41,7 @@ RUN npm install --omit=dev --workspace=apps/api
 COPY --from=builder /app/packages/shared-types ./packages/shared-types
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --from=builder /app/apps/api/src/db/schema.sql ./apps/api/src/db/schema.sql
+COPY --from=builder /app/apps/api/src/db/schema.sql ./apps/api/dist/db/schema.sql
 
 # Copy built frontend (Express serves this statically as SPA)
 COPY --from=builder /app/apps/web/dist ./apps/web/dist

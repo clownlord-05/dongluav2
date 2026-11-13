@@ -1,6 +1,6 @@
 import { getDb } from '../db';
 import { v4 as uuidv4 } from 'uuid';
-import { HandRequest, HandRequestStatus } from '@dongluav2/shared-types';
+import { HandRequest, HandRequestStatus } from '../types/shared';
 
 const REQUEST_TTL_MINUTES = 10;
 

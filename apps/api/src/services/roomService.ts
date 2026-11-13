@@ -1,7 +1,7 @@
 import { getDb } from '../db';
 import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
-import { Room, RoomView } from '@dongluav2/shared-types';
+import { Room, RoomView } from '../types/shared';
 
 function generateRoomCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';

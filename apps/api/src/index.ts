@@ -64,9 +64,14 @@ async function bootstrap() {
   });
 
   // Serve static frontend if built
-  const webDistPath = path.resolve(__dirname, '../../web/dist');
-  const altDistPath = path.resolve(__dirname, '../web/dist');
-  const finalDistPath = fs.existsSync(webDistPath) ? webDistPath : (fs.existsSync(altDistPath) ? altDistPath : null);
+  const possibleWebPaths = [
+    path.resolve(__dirname, '../../web/dist'),
+    path.resolve(__dirname, '../web/dist'),
+    path.resolve(process.cwd(), '../web/dist'),
+    path.resolve(process.cwd(), 'web/dist'),
+    path.resolve(process.cwd(), '../../apps/web/dist'),
+  ];
+  const finalDistPath = possibleWebPaths.find((p) => fs.existsSync(p)) || null;
 
   if (finalDistPath) {
     app.use(express.static(finalDistPath));

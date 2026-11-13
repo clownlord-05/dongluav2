@@ -115,10 +115,17 @@ export async function initDb(): Promise<DbWrapper> {
   sqlInstance = buffer ? new SQL.Database(buffer) : new SQL.Database();
 
   // Run schema
-  const schemaPath = path.join(__dirname, 'schema.sql');
-  if (fs.existsSync(schemaPath)) {
-    const schema = fs.readFileSync(schemaPath, 'utf-8');
-    sqlInstance.exec(schema);
+  const possiblePaths = [
+    path.join(__dirname, 'schema.sql'),
+    path.join(__dirname, '../src/db/schema.sql'),
+    path.join(process.cwd(), 'src/db/schema.sql'),
+  ];
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      const schema = fs.readFileSync(p, 'utf-8');
+      sqlInstance.exec(schema);
+      break;
+    }
   }
 
   // Ensure title column exists in room_playback (migration)

@@ -1,5 +1,5 @@
 import { getDb } from '../db';
-import { RoomPlayback, PlaybackState } from '@dongluav2/shared-types';
+import { RoomPlayback, PlaybackState } from '../types/shared';
 
 export function getPlayback(roomId: string): RoomPlayback | undefined {
   const db = getDb();
