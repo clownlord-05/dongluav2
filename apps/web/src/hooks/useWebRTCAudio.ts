@@ -2,30 +2,18 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useRoomStore } from '../store/roomStore';
 import { useAuthStore } from '../store/authStore';
 import { useAudioStore } from '../store/audioStore';
-import { registerPlaybackAudioContext, unregisterPlaybackAudioContext } from './useAudio';
+import {
+  registerPlaybackAudioContext,
+  unregisterPlaybackAudioContext,
+  createStudioVocalPreamp,
+} from './useAudio';
 import type { Socket } from 'socket.io-client';
 
-/**
- * Pure WebAudio STREAM_MUSIC 48kHz Studio Audio Engine (AudioWorklet + Volatile Binary Stream).
- *
- * Why NO RTCPeerConnection is created:
- * - On Android Chrome & iOS Safari, attaching a mic track to RTCPeerConnection forces the mobile OS
- *   into Telephony Call Mode (MODE_IN_COMMUNICATION / AVAudioSessionModeVoiceChat), which:
- *   1) Switches output from Loudspeaker (Loa ngoài) to Earpiece (Loa trong / Loa thoại)
- *   2) Ducks (reduces by 80%) the YouTube iframe beat volume
- *   3) Applies telephony bandpass & noise gate to the microphone, cutting off whispers and high notes
- * - By streaming 100% via WebAudio AudioContext (STREAM_MUSIC / MODE_NORMAL) + off-main-thread AudioWorklet:
- *   1) Phone stays 100% on Loudspeaker (Loa ngoài) or Headphones
- *   2) YouTube beat plays at 100% full volume without ducking
- *   3) Full-range 48,000Hz studio audio with ZERO silence gate captures every tiny whisper and high note
- *   4) Scales effortlessly to 200+ audience members with 0% main-thread lag
- */
 const WORKLET_CODE = `
 class DongLuaStudioProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     // 1920 samples at 48kHz = 40ms studio frame (25 frames/sec)
-    // Balances ultra-low latency with 16x lower server packet load for 10 speakers + 200 listeners!
     this.buffer = new Int16Array(1920);
     this.writeIndex = 0;
     this.maxPeak = 0;
@@ -43,10 +31,9 @@ class DongLuaStudioProcessor extends AudioWorkletProcessor {
       const clamped = s < -1 ? -1 : s > 1 ? 1 : s;
       this.buffer[this.writeIndex++] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
       if (this.writeIndex >= 1920) {
-        // -78 dBFS ultra-sensitive threshold + 500ms (12 frames) tail hangover:
-        // Captures 100% of whispers, breaths, and high notes while preventing silent mics on stage from flooding the server!
-        if (this.maxPeak > 0.00012) {
-          this.hangoverFrames = 12;
+        // Ultra-sensitive -85 dBFS threshold + 600ms (15 frames) hangover
+        if (this.maxPeak > 0.00005) {
+          this.hangoverFrames = 15;
         }
         if (this.hangoverFrames > 0) {
           this.hangoverFrames--;
@@ -77,6 +64,7 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
   const members = useRoomStore((s) => s.members);
   const stream = useAudioStore((s) => s.stream);
   const isMuted = useAudioStore((s) => s.isMuted);
+  const localMicGain = useAudioStore((s) => s.gain);
   const userVolumes = useAudioStore((s) => s.userVolumes);
   const userMutes = useAudioStore((s) => s.userMutes);
 
@@ -84,6 +72,14 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
   const nextPlayTimeMap = useRef<Map<string, number>>(new Map());
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletLoadedRef = useRef<boolean>(false);
+  const vocalPreampRef = useRef<ReturnType<typeof createStudioVocalPreamp> | null>(null);
+
+  // Sync live studio vocal preamp when user adjusts mic gain slider
+  useEffect(() => {
+    if (vocalPreampRef.current) {
+      vocalPreampRef.current.setGain(localMicGain);
+    }
+  }, [localMicGain]);
 
   // Initialize shared AudioContext on STREAM_MUSIC (Loudspeaker / Media mode)
   const getAudioContext = useCallback(() => {
@@ -129,14 +125,14 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
     }
   }, [cleanupPeer]);
 
-  // Compute combined gain for a remote speaker (User local volume * Host stage gain * 1.35x clarity boost)
+  // Compute combined gain for a remote speaker (User local volume * Host stage gain * 1.6x stage presence)
   const computeSpeakerGain = useCallback((speakerId: string) => {
     const { userVolumes: curVolumes, userMutes: curMutes } = useAudioStore.getState();
     if (curMutes[speakerId]) return 0;
     const localVol = (curVolumes[speakerId] ?? 100) / 100;
     const member = useRoomStore.getState().members.find((m) => m.user_id === speakerId);
     const hostGain = member?.gain ?? 1.0;
-    return localVol * hostGain * 1.35;
+    return localVol * hostGain * 1.6;
   }, []);
 
   // Update volume & mute for remote speakers dynamically
@@ -209,7 +205,6 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
 
         const now = ctx.currentTime;
         let nextTime = nextPlayTimeMap.current.get(speakerId) || 0;
-        // Strict per-speaker anti-drift (<90ms max window for 40ms frames)
         if (nextTime < now) {
           nextTime = now + 0.012;
         } else if (nextTime - now > 0.09) {
@@ -231,19 +226,28 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
     };
   }, [socket, roomId, currentUserId, cleanupPeer, computeSpeakerGain, getAudioContext]);
 
-  // Off-Main-Thread 48kHz Studio Broadcaster (with automatic fallback if AudioWorklet is unavailable)
+  // Off-Main-Thread 48kHz Studio Broadcaster with Built-In 4.5x Vocal Preamp & Limiter in the SAME AudioContext
   useEffect(() => {
     if (!socket || !roomId || !stream) return;
 
     let cancelled = false;
     let sourceNode: MediaStreamAudioSourceNode | null = null;
+    let preamp: ReturnType<typeof createStudioVocalPreamp> | null = null;
     let workletNode: AudioWorkletNode | null = null;
     let fallbackProcessor: ScriptProcessorNode | null = null;
     let silentGain: GainNode | null = null;
 
     const setupBroadcaster = async () => {
       const ctx = getAudioContext();
+      if (ctx.state === 'suspended') {
+        await ctx.resume().catch(() => {});
+      }
+
       sourceNode = ctx.createMediaStreamSource(stream);
+      preamp = createStudioVocalPreamp(ctx, useAudioStore.getState().gain ?? 1.0);
+      vocalPreampRef.current = preamp;
+      sourceNode.connect(preamp.inputNode);
+
       silentGain = ctx.createGain();
       silentGain.gain.value = 0;
       silentGain.connect(ctx.destination);
@@ -264,7 +268,7 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
               chunk: event.data,
             });
           };
-          sourceNode.connect(workletNode);
+          preamp.outputNode.connect(workletNode);
           workletNode.connect(silentGain);
           return;
         }
@@ -288,7 +292,7 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
             chunk: pcm16.buffer,
           });
         };
-        sourceNode.connect(fallbackProcessor);
+        preamp.outputNode.connect(fallbackProcessor);
         fallbackProcessor.connect(silentGain);
       }
     };
@@ -297,10 +301,12 @@ export function useWebRTCAudio(socket: Socket | null, roomId: string | undefined
 
     return () => {
       cancelled = true;
+      vocalPreampRef.current = null;
       try {
         workletNode?.port.close();
         workletNode?.disconnect();
         fallbackProcessor?.disconnect();
+        preamp?.disconnect();
         sourceNode?.disconnect();
         silentGain?.disconnect();
       } catch (e) {}

@@ -4,37 +4,35 @@ import { connectLiveKit, publishAudioTrack, disconnectLiveKit } from '../lib/liv
 import { getLiveKitToken } from '../lib/api';
 import type { AudioConstraintsActual } from '../types';
 
-// Strict Media Recording Constraints (forces AudioParameters::NO_EFFECTS in Chromium so Android NEVER enters MODE_IN_COMMUNICATION)
+// Studio Vocal Constraints:
+// - echoCancellation: false -> Prevents Android/iOS from entering VoIP Call Mode (Earpiece / Loa trong) & prevents beat ducking!
+// - noiseSuppression: false -> Prevents background gate from cutting off high notes, vibrato, and whispers!
+// - autoGainControl: true  -> Enables hardware mic preamp so quiet voices & distant mics are boosted to full studio volume!
 export const RAW_CONSTRAINTS: any = {
-  echoCancellation: { exact: false },
-  noiseSuppression: { exact: false },
-  autoGainControl: { exact: false },
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: true,
   sampleRate: { ideal: 48000 },
   googEchoCancellation: false,
   googExperimentalEchoCancellation: false,
-  googAutoGainControl: false,
-  googExperimentalAutoGainControl: false,
+  googAutoGainControl: true,
+  googExperimentalAutoGainControl: true,
   googNoiseSuppression: false,
   googExperimentalNoiseSuppression: false,
   googHighpassFilter: false,
-  googAudioMirroring: false,
 };
 
 export const STANDARD_CONSTRAINTS: any = {
   echoCancellation: false,
-  noiseSuppression: false,
-  autoGainControl: false,
+  noiseSuppression: true,
+  autoGainControl: true,
   googEchoCancellation: false,
-  googExperimentalEchoCancellation: false,
-  googAutoGainControl: false,
-  googExperimentalAutoGainControl: false,
-  googNoiseSuppression: false,
-  googExperimentalNoiseSuppression: false,
-  googHighpassFilter: false,
+  googAutoGainControl: true,
+  googNoiseSuppression: true,
 };
 
-const EARPIECE_REGEX = /earpiece|loa thoại|loa trong|receiver/i;
-const SPEAKERPHONE_REGEX = /speakerphone|loa ngoài|speaker/i;
+const EARPIECE_REGEX = /^(earpiece|loa thoại|loa trong|receiver)$/i;
+const SPEAKERPHONE_REGEX = /^(speakerphone|loa ngoài)$/i;
 const HEADPHONE_REGEX = /headset|headphone|bluetooth|earphone|airpods|buds|usb|tai nghe|wired|hands-free/i;
 
 // Global registries of all hardware MediaStreams and AudioContexts
@@ -44,7 +42,6 @@ const activePlaybackContexts = new Set<AudioContext>();
 
 export function registerPlaybackAudioContext(ctx: AudioContext) {
   activePlaybackContexts.add(ctx);
-  // Immediately apply current output sinkId if supported
   const { outputRoute, selectedOutputDeviceId, outputDevices } = useAudioStore.getState();
   applySinkToContext(ctx, outputRoute, selectedOutputDeviceId, outputDevices);
 }
@@ -77,7 +74,7 @@ async function applySinkToContext(
 
     if (route === 'speaker') {
       const spkOut = outputDevices.find(
-        (d) => SPEAKERPHONE_REGEX.test(d.label) && !EARPIECE_REGEX.test(d.label)
+        (d) => SPEAKERPHONE_REGEX.test(d.label.trim()) && !EARPIECE_REGEX.test(d.label.trim())
       );
       if (spkOut && spkOut.deviceId !== 'default') {
         await (ctx as any).setSinkId(spkOut.deviceId);
@@ -85,11 +82,8 @@ async function applySinkToContext(
       }
     }
 
-    // Default system speaker sink ('')
     await (ctx as any).setSinkId('');
-  } catch (e) {
-    // Browser or OS does not support custom sinkId on AudioContext
-  }
+  } catch (e) {}
 }
 
 /**
@@ -109,7 +103,6 @@ export async function applyAudioOutputRoute(
     customOutputDeviceId !== undefined ? customOutputDeviceId : store.selectedOutputDeviceId;
   const outputDevices = store.outputDevices;
 
-  // 1. Update all WebAudio playback contexts
   for (const ctx of Array.from(activePlaybackContexts)) {
     if (ctx.state === 'closed') {
       activePlaybackContexts.delete(ctx);
@@ -118,7 +111,6 @@ export async function applyAudioOutputRoute(
     await applySinkToContext(ctx, route, targetOutputId, outputDevices);
   }
 
-  // 2. Update any HTML <audio> / <video> elements in the page
   if (typeof document !== 'undefined') {
     const mediaEls = document.querySelectorAll('audio, video');
     mediaEls.forEach((el: any) => {
@@ -192,7 +184,6 @@ export function stopAllHardwareMicStreams() {
   forceOsLoudspeakerRestore();
 }
 
-// Automatically release all hardware mic streams when user exits tab, refreshes, or closes browser
 if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', stopAllHardwareMicStreams);
   window.addEventListener('beforeunload', stopAllHardwareMicStreams);
@@ -206,98 +197,50 @@ export function checkConstraints(actual: MediaTrackSettings): {
   const result: AudioConstraintsActual = {
     echoCancellation: (actual.echoCancellation as boolean) ?? false,
     noiseSuppression: (actual.noiseSuppression as boolean) ?? false,
-    autoGainControl: (actual.autoGainControl as boolean) ?? false,
+    autoGainControl: (actual.autoGainControl as boolean) ?? true,
     channelCount: actual.channelCount ?? 1,
     sampleRate: actual.sampleRate ?? 48000,
   };
 
   if (result.echoCancellation) warnings.push('⚠️ Echo Cancellation đang bật trên thiết bị này');
   if (result.noiseSuppression) warnings.push('⚠️ Noise Suppression đang bật trên thiết bị này');
-  if (result.autoGainControl) warnings.push('⚠️ Auto Gain Control đang bật trên thiết bị này');
   if (result.sampleRate && result.sampleRate !== 48000)
     warnings.push(`⚠️ Sample rate thực tế: ${result.sampleRate}Hz (chuẩn 48000Hz)`);
 
   return { result, warnings };
 }
 
-/**
- * Selects the optimal hardware deviceId so Android Chrome NEVER picks DEVICE_EARPIECE ("Loa trong").
- * - In Chromium Android (AudioManagerAndroid.java), `deviceId: "default"` calls `selectDefaultDevice()`
- *   which prefers `DEVICE_EARPIECE` over `DEVICE_SPEAKERPHONE`!
- * - By explicitly picking the "Speakerphone" ("Loa ngoài") deviceId when outputRoute === 'speaker',
- *   Chromium calls `AudioManager.setSpeakerphoneOn(true)` at the OS level!
- */
-async function resolveOptimalInputDeviceId(
-  requestedDeviceId?: string,
-  outputRoute: 'speaker' | 'headphone' = 'speaker'
-): Promise<string | undefined> {
-  try {
-    if (!navigator.mediaDevices?.enumerateDevices) return requestedDeviceId;
-    const all = await navigator.mediaDevices.enumerateDevices();
-    const inputs = all.filter((d) => d.kind === 'audioinput' && !EARPIECE_REGEX.test(d.label));
-
-    // If user explicitly picked a specific non-default, non-earpiece device in settings, honor it
-    if (requestedDeviceId && requestedDeviceId !== 'default') {
-      const matched = inputs.find((d) => d.deviceId === requestedDeviceId);
-      if (matched) return matched.deviceId;
-    }
-
-    if (outputRoute === 'headphone') {
-      const headphoneInput = inputs.find((d) => HEADPHONE_REGEX.test(d.label));
-      if (headphoneInput) return headphoneInput.deviceId;
-    }
-
-    // Default or fallback: ALWAYS prefer "Speakerphone" ("Loa ngoài") on Android so OS forces setSpeakerphoneOn(true)
-    const speakerphoneInput = inputs.find(
-      (d) => SPEAKERPHONE_REGEX.test(d.label) || d.deviceId === 'speakerphone'
-    );
-    if (speakerphoneInput) {
-      return speakerphoneInput.deviceId;
-    }
-
-    return requestedDeviceId && requestedDeviceId !== 'default' ? requestedDeviceId : undefined;
-  } catch (e) {
-    return requestedDeviceId && requestedDeviceId !== 'default' ? requestedDeviceId : undefined;
-  }
-}
-
-async function openRawStreamWithDevice(
+async function openMicStream(
   targetDeviceId: string | undefined,
   mode: 'raw' | 'standard'
 ): Promise<MediaStream | null> {
   const targetConstraints = mode === 'raw' ? RAW_CONSTRAINTS : STANDARD_CONSTRAINTS;
 
-  // Stage 1: Strict NO_EFFECTS (`exact: false`) so Chromium never calls SetCommunicationAudioModeOn(true)
+  // Stage 1: Studio constraints (echoCancellation: false, autoGainControl: true)
   try {
     return await navigator.mediaDevices.getUserMedia({
       audio: {
         ...targetConstraints,
-        deviceId: targetDeviceId ? { exact: targetDeviceId } : undefined,
+        deviceId: targetDeviceId && targetDeviceId !== 'default' ? { ideal: targetDeviceId } : undefined,
       },
       video: false,
     });
   } catch (err1) {
-    // Stage 2: Mobile RAW Media constraints with ideal deviceId and boolean false
+    // Stage 2: Mobile constraints
     try {
       return await navigator.mediaDevices.getUserMedia({
         audio: {
-          ...STANDARD_CONSTRAINTS,
-          deviceId: targetDeviceId ? { ideal: targetDeviceId } : undefined,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: true,
+          deviceId: targetDeviceId && targetDeviceId !== 'default' ? { ideal: targetDeviceId } : undefined,
         },
         video: false,
       });
     } catch (err2) {
-      // Stage 3: Bare audio constraint with immediate constraint disable
+      // Stage 3: Bare audio fallback
       try {
-        const s = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-          },
-          video: false,
-        });
-        return s;
+        return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       } catch (err3) {
         return null;
       }
@@ -306,8 +249,9 @@ async function openRawStreamWithDevice(
 }
 
 /**
- * Acquires a microphone MediaStream while locking audio output to Loudspeaker ("Loa ngoài")
- * or Headphones ("Tai nghe"), preventing Android/iOS from ever routing to the Earpiece ("Loa trong").
+ * Acquires a hardware microphone MediaStream:
+ * - Preserves full sensitivity (autoGainControl: true + 4.5x WebAudio Studio Preamp)
+ * - Prevents Earpiece ("Loa trong") routing on mobile if Android Chrome picks "Earpiece"
  */
 export async function acquireMicStream(
   deviceId?: string,
@@ -316,13 +260,9 @@ export async function acquireMicStream(
   const state = useAudioStore.getState();
   const mode = customMode || state.audioMode;
   const outputRoute = state.outputRoute || 'speaker';
+  const requestedId = deviceId || state.selectedDeviceId;
 
-  const initialTargetId = await resolveOptimalInputDeviceId(
-    deviceId || state.selectedDeviceId,
-    outputRoute
-  );
-
-  let stream = await openRawStreamWithDevice(initialTargetId, mode);
+  let stream = await openMicStream(requestedId, mode);
   if (!stream) {
     alert(
       'Không thể kết nối Micro!\nVui lòng kiểm tra quyền truy cập Micro trên trình duyệt (bấm vào biểu tượng ổ khoá trên thanh địa chỉ và chọn Cho Phép Micro).'
@@ -330,28 +270,25 @@ export async function acquireMicStream(
     return null;
   }
 
-  // Now that getUserMedia permission is granted, device labels are unlocked!
-  // Re-check if Android Chrome accidentally picked "Earpiece" or "Default" instead of "Speakerphone" / "Headset".
+  // Only intervene if the mobile OS explicitly routed the track to "Earpiece" ("Loa thoại" / "Loa trong")
   try {
-    const optimalAfterGrant = await resolveOptimalInputDeviceId(
-      deviceId || state.selectedDeviceId,
-      outputRoute
-    );
     const currentTrack = stream.getAudioTracks()[0];
-    const currentSettingsId = currentTrack?.getSettings()?.deviceId;
-    const currentLabel = currentTrack?.label || '';
+    const currentLabel = (currentTrack?.label || '').trim();
+    if (EARPIECE_REGEX.test(currentLabel) && navigator.mediaDevices?.enumerateDevices) {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const inputs = all.filter((d) => d.kind === 'audioinput' && !EARPIECE_REGEX.test(d.label.trim()));
+      const replacement =
+        outputRoute === 'headphone'
+          ? inputs.find((d) => HEADPHONE_REGEX.test(d.label)) ||
+            inputs.find((d) => SPEAKERPHONE_REGEX.test(d.label.trim()))
+          : inputs.find((d) => SPEAKERPHONE_REGEX.test(d.label.trim())) || inputs[0];
 
-    const isCurrentlyEarpiece = EARPIECE_REGEX.test(currentLabel);
-    const needsSwitchToOptimal =
-      optimalAfterGrant &&
-      optimalAfterGrant !== 'default' &&
-      optimalAfterGrant !== currentSettingsId;
-
-    if (isCurrentlyEarpiece || needsSwitchToOptimal) {
-      const betterStream = await openRawStreamWithDevice(optimalAfterGrant, mode);
-      if (betterStream) {
-        stream.getTracks().forEach((t) => t.stop());
-        stream = betterStream;
+      if (replacement) {
+        const betterStream = await openMicStream(replacement.deviceId, mode);
+        if (betterStream) {
+          stream.getTracks().forEach((t) => t.stop());
+          stream = betterStream;
+        }
       }
     }
   } catch (e) {}
@@ -363,34 +300,74 @@ export async function acquireMicStream(
   const { result, warnings } = checkConstraints(actual);
   useAudioStore.getState().setActual(result, warnings);
 
-  // Re-assert output sink routing (Loudspeaker or Headphone)
   await applyAudioOutputRoute(outputRoute);
 
   return stream;
 }
 
+/**
+ * Creates a Studio Vocal Preamp + Brickwall Peak Limiter chain in the given AudioContext:
+ * - Multiplies input voice by `gain * 4.5` (450% studio preamp boost at 100% slider, up to 900% at 200% slider!)
+ * - Brickwall Limiter at -1.5dB catches only extreme peaks so loud singing never clips while whispers & normal speech are crystal clear and loud!
+ */
+export function createStudioVocalPreamp(ctx: AudioContext, initialGain: number) {
+  // High-Pass at 65Hz only removes DC offset & desk thumps while keeping 100% of vocal warmth
+  const highpass = ctx.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.value = 65;
+  highpass.Q.value = 0.707;
+
+  // Vocal Presence Shelf (+3.5 dB above 2.5 kHz for crisp articulation & high notes)
+  const presence = ctx.createBiquadFilter();
+  presence.type = 'highshelf';
+  presence.frequency.value = 2500;
+  presence.gain.value = 3.5;
+
+  // Powerful 4.5x Studio Preamp Gain
+  const preampGain = ctx.createGain();
+  preampGain.gain.value = Math.max(0.2, initialGain) * 4.5;
+
+  // Brickwall Peak Limiter (threshold -1.5dB: NEVER reduces whispers or normal voice, only prevents >0dB clipping!)
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -1.5;
+  limiter.knee.value = 4;
+  limiter.ratio.value = 16;
+  limiter.attack.value = 0.002;
+  limiter.release.value = 0.06;
+
+  highpass.connect(presence);
+  presence.connect(preampGain);
+  preampGain.connect(limiter);
+
+  return {
+    inputNode: highpass,
+    preampGain,
+    outputNode: limiter,
+    setGain: (g: number) => {
+      preampGain.gain.value = Math.max(0.2, g) * 4.5;
+    },
+    disconnect: () => {
+      try {
+        highpass.disconnect();
+        presence.disconnect();
+        preampGain.disconnect();
+        limiter.disconnect();
+      } catch (e) {}
+    },
+  };
+}
+
 export function useAudio() {
   const rawStreamRef = useRef<MediaStream | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const micGainNodeRef = useRef<GainNode | null>(null);
-  const gainValue = useAudioStore((s) => s.gain);
-
-  // Sync live mic gain node whenever user adjusts gain slider (1.5x pure preamp boost, 0 compression)
-  useEffect(() => {
-    if (micGainNodeRef.current) {
-      micGainNodeRef.current.gain.value = gainValue * 1.5;
-    }
-  }, [gainValue]);
 
   const enumerateDevices = useCallback(async () => {
     try {
       if (!navigator.mediaDevices?.enumerateDevices) return;
       const devices = await navigator.mediaDevices.enumerateDevices();
 
-      // Filter out "Earpiece" ("Loa thoại" / "Loa trong") so it can NEVER be selected
       const audioInputs = devices
-        .filter((d) => d.kind === 'audioinput' && !EARPIECE_REGEX.test(d.label))
+        .filter((d) => d.kind === 'audioinput' && !EARPIECE_REGEX.test(d.label.trim()))
         .map((d) => ({
           deviceId: d.deviceId,
           label: d.label
@@ -399,7 +376,7 @@ export function useAudio() {
         }));
 
       const audioOutputs = devices
-        .filter((d) => d.kind === 'audiooutput' && !EARPIECE_REGEX.test(d.label))
+        .filter((d) => d.kind === 'audiooutput' && !EARPIECE_REGEX.test(d.label.trim()))
         .map((d) => ({
           deviceId: d.deviceId,
           label: d.label || `Loa / Tai nghe ${d.deviceId.slice(0, 6)}`,
@@ -414,7 +391,6 @@ export function useAudio() {
 
   const captureRaw = useCallback(
     async (deviceId?: string, customMode?: 'raw' | 'standard'): Promise<MediaStream | null> => {
-      // Stop any previous hardware capture streams completely first
       const prevStream = useAudioStore.getState().stream;
       if (prevStream) {
         prevStream.getTracks().forEach((t) => t.stop());
@@ -425,58 +401,15 @@ export function useAudio() {
       if (!rawStream) return null;
       rawStreamRef.current = rawStream;
 
-      try {
-        const CtxClass = window.AudioContext || (window as any).webkitAudioContext;
-        const ctx: AudioContext = new CtxClass({
-          latencyHint: 'interactive',
-          sampleRate: 48000,
-        });
-        activeCaptureContexts.add(ctx);
-        if (ctx.state === 'suspended') {
-          await ctx.resume().catch(() => {});
-        }
-        ctx.onstatechange = () => {
-          if (ctx.state === 'suspended') {
-            ctx.resume().catch(() => {});
-          }
-        };
-        audioCtxRef.current = ctx;
+      // Store the direct hardware MediaStream in useAudioStore!
+      // NEVER wrap it in a separate AudioContext's createMediaStreamDestination(),
+      // because feeding a synthetic MediaStreamDestination track from AudioContext #1
+      // into createMediaStreamSource() of AudioContext #2 in useWebRTCAudio drops audio in Chrome/WebKit!
+      useAudioStore.getState().setStream(rawStream);
 
-        const source = ctx.createMediaStreamSource(rawStream);
+      enumerateDevices();
 
-        // Pure 100% uncompressed direct studio preamp (NO DynamicsCompressorNode so whispers & high notes are 100% preserved!)
-        const gainNode = ctx.createGain();
-        gainNode.gain.value = (useAudioStore.getState().gain ?? 1.0) * 1.5;
-        micGainNodeRef.current = gainNode;
-
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 256;
-
-        source.connect(gainNode);
-        gainNode.connect(analyser);
-        analyserRef.current = analyser;
-
-        // Route gain-adjusted audio into outbound stream if supported
-        let outboundStream = rawStream;
-        if (typeof ctx.createMediaStreamDestination === 'function') {
-          const dest = ctx.createMediaStreamDestination();
-          gainNode.connect(dest);
-          if (dest.stream.getAudioTracks().length > 0) {
-            outboundStream = dest.stream;
-          }
-        }
-
-        useAudioStore.getState().setStream(outboundStream);
-
-        // Refresh device list now that mic permission is granted
-        enumerateDevices();
-
-        return outboundStream;
-      } catch (ctxErr) {
-        console.warn('[Audio] AudioContext setup error:', ctxErr);
-        useAudioStore.getState().setStream(rawStream);
-        return rawStream;
-      }
+      return rawStream;
     },
     [enumerateDevices]
   );
@@ -484,8 +417,6 @@ export function useAudio() {
   const stopCapture = useCallback(() => {
     stopAllHardwareMicStreams();
     rawStreamRef.current = null;
-    micGainNodeRef.current = null;
-    audioCtxRef.current = null;
     analyserRef.current = null;
     useAudioStore.getState().setStream(null);
     useAudioStore.getState().setActual(null, []);

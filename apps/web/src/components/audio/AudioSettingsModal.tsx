@@ -6,6 +6,7 @@ import {
   applyAudioOutputRoute,
   registerPlaybackAudioContext,
   unregisterPlaybackAudioContext,
+  createStudioVocalPreamp,
 } from '../../hooks/useAudio';
 import {
   Mic,
@@ -53,6 +54,7 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({ isOpen, 
   const animationFrameRef = useRef<number | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const testPreampRef = useRef<ReturnType<typeof createStudioVocalPreamp> | null>(null);
   const loopbackGainRef = useRef<GainNode | null>(null);
   const fallbackAudioElRef = useRef<HTMLAudioElement | null>(null);
 
@@ -74,6 +76,10 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({ isOpen, 
     if (testStreamRef.current) {
       testStreamRef.current.getTracks().forEach((t) => t.stop());
       testStreamRef.current = null;
+    }
+    if (testPreampRef.current) {
+      testPreampRef.current.disconnect();
+      testPreampRef.current = null;
     }
     if (audioCtxRef.current) {
       unregisterPlaybackAudioContext(audioCtxRef.current);
@@ -129,17 +135,20 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({ isOpen, 
         audioCtxRef.current = ctx;
 
         const source = ctx.createMediaStreamSource(stream);
+        const preamp = createStudioVocalPreamp(ctx, useAudioStore.getState().gain ?? 1.0);
+        testPreampRef.current = preamp;
+        source.connect(preamp.inputNode);
+
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 512;
         analyser.smoothingTimeConstant = 0.35;
-        source.connect(analyser);
+        preamp.outputNode.connect(analyser);
         analyserRef.current = analyser;
 
-        // Direct voice loopback so the user hears every tiny whisper and high note in real time (1.5x pure studio preamp)
+        // Direct voice loopback using the 4.5x Studio Vocal Preamp + Limiter
         const loopGain = ctx.createGain();
-        const currentGain = (useAudioStore.getState().gain ?? 1.0) * 1.5;
-        loopGain.gain.value = isLoopback ? currentGain : 0.0;
-        source.connect(loopGain);
+        loopGain.gain.value = isLoopback ? 1.0 : 0.0;
+        preamp.outputNode.connect(loopGain);
         loopGain.connect(ctx.destination);
         loopbackGainRef.current = loopGain;
 
@@ -165,9 +174,8 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({ isOpen, 
             if (sample > peak) peak = sample;
           }
           const rms = Math.sqrt(sumSquares / timeData.length);
-          const effectiveGain = useAudioStore.getState().gain ?? 1.0;
-          // Combine RMS and Peak for natural human voice responsiveness
-          const rawLevel = Math.min(1, (rms * 3.2 + peak * 0.6) * effectiveGain);
+          // analyser is already fed by the 4.5x Studio Preamp output
+          const rawLevel = Math.min(1, rms * 1.8 + peak * 0.45);
           const pct = Math.min(100, Math.round(rawLevel * 100));
 
           if (vuBarRef.current) {
@@ -214,14 +222,14 @@ export const AudioSettingsModal: React.FC<AudioSettingsModalProps> = ({ isOpen, 
     const next = !isLoopback;
     setIsLoopback(next);
     if (loopbackGainRef.current) {
-      loopbackGainRef.current.gain.value = next ? gain * 1.5 : 0.0;
+      loopbackGainRef.current.gain.value = next ? 1.0 : 0.0;
     }
   };
 
   const handleGainChange = (newGain: number) => {
     setGain(newGain);
-    if (loopbackGainRef.current && isLoopback) {
-      loopbackGainRef.current.gain.value = newGain * 1.5;
+    if (testPreampRef.current) {
+      testPreampRef.current.setGain(newGain);
     }
   };
 
